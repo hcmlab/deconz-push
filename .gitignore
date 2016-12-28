@@ -1,0 +1,7 @@
+deconz-rest-plugin
+*.o
+*.so
+.dbg
+.DS_Store
+._.DS_Store
+bkp

@@ -1,0 +1,18 @@
+--- ./deconz-rest-plugin/de_web.pro	2016-12-28 21:57:34.197658456 +0100
++++ ./de_web.pro	2016-12-28 15:06:45.727532884 +0100
+@@ -88,6 +88,7 @@
+            rest_node_base.h \
+            rule.h \
+            scene.h \
++           ct_push_bridge.h \
+            sensor.h
+ 
+ SOURCES  = authentification.cpp \
+@@ -126,6 +127,7 @@
+            sensor.cpp \
+            reset_device.cpp \
+            rest_userparameter.cpp \
++           ct_push_bridge.cpp \
+            zcl_tasks.cpp
+ 
+ win32:DESTDIR  = ../../debug/plugins # TODO adjust

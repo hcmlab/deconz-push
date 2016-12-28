@@ -1,0 +1,77 @@
+--- ./deconz-rest-plugin/rest_node_base.cpp	2016-12-28 21:57:34.207658398 +0100
++++ ./rest_node_base.cpp	2016-12-28 17:12:55.623319729 +0100
+@@ -11,9 +11,11 @@
+ #include <QTime>
+ #include "de_web_plugin_private.h"
+ 
++
+ /*! Constructor.
+  */
+ RestNodeBase::RestNodeBase() :
++	pushNodeVarsInit()
+     m_node(0),
+     m_available(false),
+     m_mgmtBindSupported(true),
+@@ -50,6 +52,12 @@
+ void RestNodeBase::setNode(deCONZ::Node *node)
+ {
+     m_node = node;
++    
++#ifdef ENABLE_PUSH
++    if ( PushBridge::enable_fhem_tunnel ) {
++        pushBridge.SetNode ( this, node );
++    }
++#endif
+ }
+ 
+ /*! Returns the modifiable address.
+@@ -77,8 +85,14 @@
+     \param available the available state of the node
+  */
+ void RestNodeBase::setIsAvailable(bool available)
+-{
++{    
+     m_available = available;
++    
++#ifdef ENABLE_PUSH
++    if ( pushBridge.enable_plugin && m_available != available ) {
++        pushBridge.SetNodeAvailable ( this, available );
++    }
++#endif
+ }
+ 
+ /*! Returns if the data needs to be saved to database.
+@@ -92,8 +106,14 @@
+     \param needSave true if needs to be saved
+  */
+ void RestNodeBase::setNeedSaveDatabase(bool needSave)
+-{
++{    
+     m_needSaveDatabase = needSave;
++    
++#ifdef ENABLE_PUSH
++	if ( pushBridge.enable_plugin && needSave && m_pushDevice ) {
++		m_pushDevice->needsRestUpdate = true;
++	}
++#endif
+ }
+ 
+ /*! Returns the unique identifier of the node.
+@@ -109,6 +129,8 @@
+ void RestNodeBase::setId(const QString &id)
+ {
+     m_id = id;
++    
++    pushSetNodeInfo ( id );
+ }
+ 
+ /*! Returns the nodes unique Id.
+@@ -126,6 +148,8 @@
+ void RestNodeBase::setUniqueId(const QString &uid)
+ {
+     m_uid = uid;
++    
++    pushSetNodeInfo ( uid );
+ }
+ 
+ /*! Check if some data must be queried from the node.

@@ -1,0 +1,19 @@
+--- ./deconz-rest-plugin/rest_node_base.h	2016-12-28 21:57:34.207658398 +0100
++++ ./rest_node_base.h	2016-12-28 15:00:25.970168780 +0100
+@@ -13,6 +13,7 @@
+ 
+ #include <QTime>
+ #include "deconz.h"
++#include "ct_push_bridge.h"
+ 
+ /*! \class NodeValue
+ 
+@@ -77,6 +78,8 @@
+     const NodeValue &getZclValue(quint16 clusterId, quint16 attributeId) const;
+     NodeValue &getZclValue(quint16 clusterId, quint16 attributeId);
+ 
++	pushNodeExt ()
++    
+ private:
+     deCONZ::Node *m_node;
+     deCONZ::Address m_addr;

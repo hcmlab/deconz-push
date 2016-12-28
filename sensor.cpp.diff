@@ -1,0 +1,310 @@
+--- ./deconz-rest-plugin/sensor.cpp	2016-12-28 21:57:34.207658398 +0100
++++ ./sensor.cpp	2016-12-28 17:07:36.603745837 +0100
+@@ -137,6 +137,8 @@
+     sensorTypes.append("ZHASwitch");
+     sensorTypes.append("ZHALight");
+     sensorTypes.append("ZHAPresence");
++
++    pushCode ( m_pushType = PUSH_TYPE_SWITCH );
+ }
+ 
+ /*! Returns the sensor deleted state.
+@@ -167,6 +169,8 @@
+ void Sensor::setName(const QString &name)
+ {
+     m_name = name;
++
++    pushSetNodeInfo ( name );
+ }
+ 
+ /*! Returns the sensor mode (Lighting Switch).
+@@ -187,6 +191,8 @@
+  */
+ void Sensor::setMode(const uint8_t &mode)
+ {
++	pushSetNodeInfoMemComp ( mode );
++
+     m_mode = mode;
+ }
+ 
+@@ -202,6 +208,8 @@
+  */
+ void Sensor::setType(const QString &type)
+ {
++	pushSetNodeInfoMemComp ( type );
++
+     m_type = type;
+ }
+ 
+@@ -217,6 +225,8 @@
+  */
+ void Sensor::setModelId(const QString &mid)
+ {
++	pushSetNodeInfoCompName ( m_modelid, mid.trimmed(), "modelid" );
++
+     m_modelid = mid.trimmed();
+ }
+ 
+@@ -232,6 +242,8 @@
+  */
+ void Sensor::setResetRetryCount(uint8_t resetRetryCount)
+ {
++	pushSetNodeInfoMemComp ( resetRetryCount );
++
+     m_resetRetryCount = resetRetryCount;
+ }
+ 
+@@ -247,6 +259,8 @@
+  */
+ void Sensor::setZdpResetSeq(uint8_t zdpResetSeq)
+ {
++	pushSetNodeInfoMemComp ( zdpResetSeq );
++
+     m_zdpResetSeq = zdpResetSeq;
+ }
+ 
+@@ -263,6 +277,8 @@
+  */
+ void Sensor::setManufacturer(const QString &manufacturer)
+ {
++	pushSetNodeInfoMemComp ( manufacturer );
++
+     m_manufacturer = manufacturer;
+ }
+ 
+@@ -279,6 +295,8 @@
+  */
+ void Sensor::setSwVersion(const QString &swversion)
+ {
++	pushSetNodeInfoMemComp ( swversion );
++
+     m_swversion = swversion;
+ }
+ 
+@@ -302,6 +320,15 @@
+ void Sensor::setState(const SensorState &state)
+ {
+     m_state = state;
++    
++#ifdef ENABLE_PUSH
++    if ( id ().length () > 0 ) {
++		int val = id ().toInt ();
++
++		m_state.m_pushId = val;
++		m_config.m_pushId = val;
++	}
++#endif
+ }
+ 
+ /*! Returns the sensor config.
+@@ -317,6 +344,15 @@
+ void Sensor::setConfig(const SensorConfig &config)
+ {
+     m_config = config;
++    
++#ifdef ENABLE_PUSH
++    if ( id ().length () > 0 ) {
++		int val = id ().toInt ();
++
++		m_state.m_pushId = val;
++		m_config.m_pushId = val;
++	}
++#endif
+ }
+ 
+ /*! Transfers state into JSONString.
+@@ -423,6 +459,7 @@
+ /*! Constructor. */
+ SensorState::SensorState() :
+ //    m_lastupdated(""),
++	pushSensorVarsInit ()
+     m_flag(""),
+     m_status(""),
+     m_presence(""),
+@@ -451,6 +488,8 @@
+ void SensorState::setLastupdated(const QString &lastupdated)
+ {
+     m_lastupdated = lastupdated;
++
++    pushSetSensorStateInfo ( lastupdated );
+ }
+ 
+ /*! Returns the sensor state flag attribute.
+@@ -468,6 +507,8 @@
+ void SensorState::setFlag(const QString &flag)
+ {
+     m_flag = flag;
++
++    pushSetSensorStateInfo ( flag );
+ }
+ 
+ /*! Returns the sensor state status attribute.
+@@ -485,6 +526,8 @@
+ void SensorState::setStatus(const QString &status)
+ {
+     m_status = status;
++
++    pushSetSensorStateInfo ( status );
+ }
+ 
+ /*! Returns the sensor state presence attribute.
+@@ -501,6 +544,8 @@
+ void SensorState::setPresence(const QString &presence)
+ {
+     m_presence = presence;
++
++    pushSetSensorStateInfo ( presence );
+ }
+ 
+ /*! Returns the sensor state open attribute.
+@@ -518,6 +563,8 @@
+ void SensorState::setOpen(const QString &open)
+ {
+     m_open = open;
++
++    pushSetSensorStateInfo ( open );
+ }
+ 
+ /*! Returns the sensor state buttonevent attribute.
+@@ -535,6 +582,8 @@
+ void SensorState::setButtonevent(int buttonevent)
+ {
+     m_buttonevent = buttonevent;
++
++    pushSetSensorStateInfo ( buttonevent );
+ }
+ 
+ /*! Returns the sensor state temperature attribute.
+@@ -552,6 +601,8 @@
+ void SensorState::setTemperature(const QString &temperature)
+ {
+     m_temperature = temperature;
++
++    pushSetSensorStateInfo ( temperature );
+ }
+ 
+ /*! Returns the sensor state humidity attribute.
+@@ -570,6 +621,8 @@
+ void SensorState::setHumidity(const QString &humidity)
+ {
+     m_humidity = humidity;
++
++    pushSetSensorStateInfo ( humidity );
+ }
+ 
+ /*! Returns the sensor state daylight attribute.
+@@ -587,6 +640,8 @@
+ void SensorState::setDaylight(const QString &daylight)
+ {
+     m_daylight = daylight;
++
++    pushSetSensorStateInfo ( daylight );
+ }
+ 
+ /*! Returns the sensor state lux attribute.
+@@ -603,6 +658,8 @@
+  */
+ void SensorState::setLux(quint32 lux)
+ {
++	pushSetSensorStateInfoMemComp ( lux );
++
+     m_lux = lux;
+ }
+ 
+@@ -612,11 +669,14 @@
+ {
+     QDateTime datetime = QDateTime::currentDateTimeUtc();
+     m_lastupdated = datetime.toString("yyyy-MM-ddTHH:mm:ss"); // ISO 8601
++
++	pushSetSensorStateInfoMem ( lastupdated );
+ }
+ 
+ // Sensor Config
+ /*! Constructor. */
+ SensorConfig::SensorConfig() :
++	pushSensorVarsInit ()
+     m_on(true),
+     m_reachable(false),
+     m_duration(-1),
+@@ -644,6 +704,8 @@
+ void SensorConfig::setOn(bool on)
+ {
+     m_on = on;
++
++    pushSetSensorConfigState ( on );
+ }
+ 
+ /*! Returns the sensor config reachable attribute.
+@@ -661,6 +723,8 @@
+ void SensorConfig::setReachable(bool reachable)
+ {
+     m_reachable = reachable;
++
++    pushSetSensorConfigInfo ( reachable );
+ }
+ 
+ /*! Returns the sensor config duration attribute.
+@@ -680,6 +744,8 @@
+     DBG_Assert(duration >= 0 && duration < 65535);
+     if (duration >= 0 && duration <= 65535)
+     {
++		pushSetSensorConfigInfoMemCompDouble ( duration );
++
+         m_duration = duration;
+     }
+ }
+@@ -698,7 +764,10 @@
+  */
+ void SensorConfig::setBattery(quint8 battery)
+ {
++	pushSetSensorConfigInfoMemComp  ( battery );
++
+     m_battery = battery;
++
+ }
+ 
+ /*! Returns the sensor config url attribute.
+@@ -716,6 +785,8 @@
+ void SensorConfig::setUrl(const QString &url)
+ {
+     m_url = url;
++
++    pushSetSensorConfigInfo ( url );
+ }
+ 
+ /*! Returns the sensor config longitude attribute.
+@@ -733,6 +804,8 @@
+ void SensorConfig::setLongitude(const QString &longitude)
+ {
+     m_long = longitude;
++
++    pushSetSensorConfigInfo ( longitude );
+ }
+ 
+ /*! Returns the sensor config lat attribute.
+@@ -750,6 +823,8 @@
+ void SensorConfig::setLat(const QString &lat)
+ {
+     m_lat = lat;
++
++	pushSetSensorConfigInfoName ( lat, "latitude" );
+ }
+ 
+ /*! Returns the sensor config sunriseoffset attribute.
+@@ -767,6 +842,8 @@
+ void SensorConfig::setSunriseoffset(const QString &sunriseoffset)
+ {
+     m_sunriseoffset = sunriseoffset;
++
++    pushSetSensorConfigInfo ( sunriseoffset );
+ }
+ 
+ /*! Returns the sensor config sunsetoffset attribute.
+@@ -784,4 +861,7 @@
+ void SensorConfig::setSunsetoffset(const QString &sunsetoffset)
+ {
+     m_sunsetoffset = sunsetoffset;
++
++    pushSetSensorConfigInfo ( sunsetoffset );
+ }
++
