@@ -1,7 +1,7 @@
 Introduction
 -----------------------------------
 
-The fhem-deconz-push is an extension for the [deCONZ](http://www.dresden-elektronik.de/funktechnik/products/software/pc/deconz?L=1) REST plugin and creates a tunnel to a local fhem instance (or provides a push socket) in order to instantly push any changes of ZigBee devices (managed by the deCONZ application) to fhem (or the socket).
+The deconz-push is an extension for the [deCONZ](http://www.dresden-elektronik.de/funktechnik/products/software/pc/deconz?L=1) REST plugin and creates a tunnel to a local fhem instance (or provides a push socket) in order to instantly push any changes of ZigBee devices (managed by the deCONZ application) to fhem (or the socket).
 This help reduce polling load of fhem and change the poll intervall to e.g. 3600 seconds (once an hour).
 Much more important, this extension enables using button devices (e.g. Philips Dimmer Switch, Hue Tap) for fhem.
 Support for this extension is given at forum.fhem.de
