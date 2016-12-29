@@ -93,7 +93,7 @@ s: 1
 g: 1
 ```
 In this example, the light nodes 1, 2, and 3 have changed; the sensor node 1 has changed; the group node 1 has changed.
-\
+<br>
 An example communication trace could look like:<br/>
 Client:
 ```bash
