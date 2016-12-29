@@ -1,14 +1,14 @@
 Introduction
 -----------------------------------
 
-The fhem-deconz-push is an extension for the [deCONZ](http://www.dresden-elektronik.de/funktechnik/products/software/pc/deconz?L=1) REST plugin and creates a tunnel to a local fhem instance (or provides a push socket) in order to instantly push any changes of ZigBee devices (managed by the deCONZ application) to fhem (or the socket).
-This help reduce polling load of fhem and change the poll intervall to e.g. 3600 seconds (once an hour).
-Much more important, this extension enables using button devices (e.g. Philips Dimmer Switch, Hue Tap) for fhem.
-Support for this extension is given at forum.fhem.de
+The deconz-push is an extension for the [deCONZ](http://www.dresden-elektronik.de/funktechnik/products/software/pc/deconz?L=1) REST plugin that provides a push socket and/or creates a tunnel to a local fhem instance in order to instantly push any changes of ZigBee devices (managed by the deCONZ application) to fhem (or the socket).
+This helps reduce polling load of fhem/home-apps and allow to change poll intervalls to e.g. 3600 seconds (once an hour).
+Much more important, this extension enables using button devices (e.g. Philips Dimmer Switch, Hue Tap) for home automation.
+Support for this extension is given at https://forum.fhem.de/index.php/topic,63614.0.html
 
 ![PushTunnel](/fhem-deconz-tunnel.png)
-The figure shows where the extension is located and how it integrates into deCONZ/fhem. ZigBee devices are managed and controlled through deCONZ as the bridge. As soon as something has changed (e.g. a button was pressed, a light has been turned on), the events trigger a message that instantly changes readings (e.g. state, pct, onoff, etc.) of the according HUEDevices in fhem.
-Basically, there is no need anymore for polling cycles between fhem and the bridge.
+The figure shows where the extension is located and how it integrates into deCONZ/home automation. ZigBee devices are managed and controlled through deCONZ as the bridge. As soon as something has changed (e.g. a button was pressed, a light has been turned on), the according deCONZ events trigger a message that instantly changes readings (e.g. state, pct, onoff, etc.) of the according HUEDevices in fhem or push message to listeners.
+Basically, there is no need anymore for polling cycles between home automation apps and the bridge.
 
 
 License
