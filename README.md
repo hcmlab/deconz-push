@@ -14,7 +14,7 @@ Basically, there is no need anymore for polling cycles between fhem and the brid
 License
 -----------------------------------
 The plugin is available as open source and licensed under the [Eclipse Public License - Version 1.0](LICENSE.html).
-
+<br><br>
 
 Requirements for FHEM
 -----------------------------------
@@ -23,56 +23,62 @@ Requirements for FHEM
   3. The deCONZ application and FHEM run on the same RaspBerry<br/>
   4. Telnet in fhem is enabled<br/>
   4.1 Authentication/SSL on telnet is NOT supported yet<br/>
+<br>
 
 Requirements without FHEM
 -----------------------------------
-  1. ZigBee devices are managed by deCONZ<br/>
+  1. ZigBee devices are managed by deCONZ
+<br><br>
 
 
 Usage
 -----------------------------------
-1. Open a terminal (bash) to/at the RaspBerry (e.g. SSH)
+**1.** Open a terminal (bash) to/at the RaspBerry (e.g. SSH)
+<br><br>
 
-
-2. Download the project
+**2.** Download the project
 ```bash
 git clone https://hcm-lab.de/git/chi-tai/deconz-push.git
 cd fhem-deconz
 ```
+<br>
 
-3. For FHEM: Path to fhem home
+**3.** For FHEM: Path to fhem home
 If FHEM is not installed in /opt/fhem, then you must provide the path through the following command:
 ```bash
 export FHEM_HOME=/your/path/to/fhem
 ```
+<br>
 
-4. Install the plugin
+**4.** Install the plugin
 ```bash
 ./install.sh
 ```
 The script installs an extension script (99_myDeconz1.pm) into the FHEM folder, creates a backup of the original rest-plugin, and installs the push extension.
+<br><br>
 
-
-5. OPTIONAL. Instead of using the prebuilt binary, you may build the plugin yourself.<br/>
-The build script automatically installs the plugin. So, if you decide to build the plugin by yourself, you can skip the next step (4.).
+**5.** OPTIONAL. Instead of using the prebuilt binary, you may build the plugin yourself.<br>
+The build script automatically installs the plugin. So, if you decide to build the plugin by yourself, you can skip the previous step (4.).
 ```bash
 ./build.sh
 ```
 The script downloads and install all necessary packages to build the plugin and invokes a make afterwards.
 If the build was successful the script invokes install.sh afterwards.
+<br><br>
 
-
-6. For FHEM: Restart FHEM<br/>
+**6.** For FHEM: Restart FHEM<br>
 Enter "shutdown restart" into the fhem commandbox.
+<br><br>
 
-
-7. Restart deCONZ<br/>
+7. Restart deCONZ<br>
 Depending on how you installed deCONZ, you need to stop (if it is still running) and start deCONZ.
+<br><br>
 
 
 Push using fhem tunnel
 -----------------------------------
 Any changes of a rest node result in change of the related readings in the HUEDevices.
+<br><br>
 
 Push using socket listener
 -----------------------------------
@@ -87,7 +93,29 @@ s: 1
 g: 1
 ```
 In this example, the light nodes 1, 2, and 3 have changed; the sensor node 1 has changed; the group node 1 has changed.
-
+\
+An example communication trace could look like:<br/>
+Client:
+```bash
+1
+```
+wait... push message:
+```bash
+l: 1
+```
+Client:
+```bash
+1
+```
+wait... push message:
+```bash
+l: 2
+```
+Client:
+```bash
+0
+```
+<br>
 
 Remove the plugin
 -----------------------------------
@@ -95,6 +123,7 @@ The install script automatically creates a backup of the original plugin in the 
 ```bash
 ./uninstall.sh
 ```
+<br>
 
 Configuration through FHEM
 -----------------------------------
@@ -124,6 +153,7 @@ setreading deCONZBridge fhemPort 7072
 ```bash
 setreading deCONZBridge pushPort 7073
 ```
+<br>
 
 
 Configuration without FHEM
