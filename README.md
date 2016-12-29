@@ -43,7 +43,7 @@ cd deconz-push
 ```
 <br>
 
-**3.** For FHEM: Path to fhem home
+**3.** OPTIONAL. For FHEM: Path to fhem home<br>
 If FHEM is not installed in /opt/fhem, then you must provide the path through the following command:
 ```bash
 export FHEM_HOME=/your/path/to/fhem
@@ -62,7 +62,7 @@ The build script automatically installs the plugin. So, if you decide to build t
 ```bash
 ./build.sh
 ```
-The script downloads and install all necessary packages to build the plugin and invokes a make afterwards.
+The script downloads and installs all necessary packages to build the plugin and invokes a "make" afterwards.
 If the build was successful the script invokes install.sh afterwards.
 <br><br>
 
@@ -70,7 +70,7 @@ If the build was successful the script invokes install.sh afterwards.
 Enter "shutdown restart" into the fhem commandbox.
 <br><br>
 
-7. Restart deCONZ<br>
+**7.** Restart deCONZ<br>
 Depending on how you installed deCONZ, you need to stop (if it is still running) and start deCONZ.
 <br><br>
 
