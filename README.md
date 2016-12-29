@@ -83,7 +83,7 @@ Any changes of a rest node result in change of the related readings in the HUEDe
 Push using socket listener
 -----------------------------------
 Client listeners have to connect to the IP of the deCONZ plugin and configured port (default: 7073).
-Before a push message can be signaled, a client has to send a '1' to indicate its ready state (after all push messages).
+Before a push message can be signaled, a client has to send a '1' to indicate its ready state (for each push message).
 If a client sends a '0', then the connection will be terminated.
 Any changes of a rest node result in a message that lists the rest node ids. For example:
 
