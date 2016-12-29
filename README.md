@@ -39,7 +39,7 @@ Usage
 **2.** Download the project
 ```bash
 git clone https://hcm-lab.de/git/chi-tai/deconz-push.git
-cd fhem-deconz
+cd deconz-push
 ```
 <br>
 
