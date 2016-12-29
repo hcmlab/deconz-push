@@ -19,7 +19,7 @@ The plugin is available as open source and licensed under the [Eclipse Public Li
 Requirements for FHEM
 -----------------------------------
   1. FHEM installation on RaspBerry Pi<br/>
-  2. ZigBee devices are managed by deCONZ and included into FHEM as HUEDevice's<br/>
+  2. ZigBee devices are managed by deCONZ and included into FHEM as type HUEDevice<br/>
   3. The deCONZ application and FHEM run on the same RaspBerry<br/>
   4. Telnet in fhem is enabled<br/>
   4.1 Authentication/SSL on telnet is NOT supported yet<br/>
