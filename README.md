@@ -38,7 +38,7 @@ Usage
 
 **2.** Download the project
 ```bash
-git clone https://hcm-lab.de/git/chi-tai/deconz-push.git
+git clone https://hcm-lab.de/git/projects/deconz-push.git
 cd deconz-push
 ```
 <br>
