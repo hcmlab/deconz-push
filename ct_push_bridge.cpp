@@ -45,6 +45,9 @@ using namespace std;
 #ifdef ENABLE_PUSH
 
 //#define DEBUGV3
+#define ENABLE_BULK_UPDATE
+//#define ENABLE_BULK_UPDATE1
+
 
 /*
 #ifdef DEBUGV2
@@ -613,10 +616,14 @@ void PushBridge::SetNodeAvailable ( void * restNode, bool available )
         DEBUGV ( "SetNodeAvailable: Reachable " << reachable << " to device:" << name );
         DEBUGV1 ( "SetNodeAvailable: Reachable " << reachable << " to device:" << name );
 
+#ifdef ENABLE_BULK_UPDATE
+		snprintf ( cmd, 256, "{pushupd('%s^reachable^%i^_reachable^%i^available^%i')}\n"
+        , name, reachable, reachable, reachable );
+#else
         snprintf ( cmd, 256, "setreading %s reachable %i\nsetreading %s _reachable %i\n"
             "setreading %s available %i\n"
         , name, reachable, name, reachable, name, reachable );
-
+#endif
         EnqueueToFhem ( cmd );
     }
 }
@@ -650,7 +657,11 @@ void PushBridge::SetNodeInfo ( void * restNode, int type, const char * reading, 
     DEBUGV ( "SetNodeInfo " << GetNodeType ( device->type ) << ": " << name << " " << reading );
 
     char buffer [ 256 ];
+#ifdef ENABLE_BULK_UPDATE1
+	snprintf ( buffer, 256, "{pushupd('%s^%s^%s')}\n", name, reading, qPrintable ( value ) );
+#else
     snprintf ( buffer, 256, "setreading %s %s %s\n", name, reading, qPrintable ( value ) );
+#endif
 
     DEBUGFTRACE ( "SetNodeInfo 15" );
     EnqueueToFhem ( buffer );
@@ -668,8 +679,11 @@ void PushBridge::SetNodeInfo ( void *, QString & qdevice, const char * reading, 
     DEBUGV ( "SetNodeInfo: " << name << " " << reading );
 
     char buffer [ 256 ];
+#ifdef ENABLE_BULK_UPDATE1
+	snprintf ( buffer, 256, "{pushupd('%s^%s^%i')}\n", name, reading, value );
+#else
     snprintf ( buffer, 256, "setreading %s %s %i\n", name, reading, value );
-
+#endif
     EnqueueToFhem ( buffer );
 }
 
@@ -702,8 +716,11 @@ void PushBridge::SetNodeInfo ( void * restNode, int type, const char * reading, 
     DEBUGV ( "SetNodeInfo " << GetNodeType ( device->type ) << ": " << name << " " << reading );
 
     char buffer [ 256 ];
+#ifdef ENABLE_BULK_UPDATE1
+	snprintf ( buffer, 256, "{pushupd('%s^%s^%i')}\n", name, reading, value );
+#else
     snprintf ( buffer, 256, "setreading %s %s %i\n", name, reading, value );
-
+#endif
     EnqueueToFhem ( buffer );
 }
 
@@ -730,8 +747,11 @@ void PushBridge::SetNodeInfoDouble ( void * restNode, int type, const char * rea
     DEBUGFTRACE ( "SetNodeInfoDouble " << GetNodeType ( device->type ) << ": " << name << " " << reading );
 
     char buffer [ 256 ];
+#ifdef ENABLE_BULK_UPDATE1
+	snprintf ( buffer, 256, "{pushupd('%s^%s^%f')}\n", name, reading, value );
+#else
     snprintf ( buffer, 256, "setreading %s %s %f\n", name, reading, value );
-
+#endif
     EnqueueToFhem ( buffer );
 }
 
@@ -758,8 +778,11 @@ void PushBridge::SetNodeState ( void * restNode, int type, bool reading )
     DEBUGFTRACE ( "SetNodeState " << GetNodeType ( device->type ) << ": " << name << " " << reading );
 
     char buffer [ 256 ];
+#ifdef ENABLE_BULK_UPDATE
+	snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0 );
+#else
     snprintf ( buffer, 256, "setreading %s state %s\nsetreading %s onoff %d\n", name, reading ? "on" : "off", name, reading ? 1 : 0 );
-
+#endif
     EnqueueToFhem ( buffer );
 }
 
@@ -788,8 +811,11 @@ void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char
 
     if ( fhemActive ) {
         char buffer [ 128 ];
+#ifdef ENABLE_BULK_UPDATE1
+	    snprintf ( buffer, 128, "{pushupd('%s^%s^%i')}\n", groupName, reading, value );
+#else
         snprintf ( buffer, 128, "setreading %s %s %i\n", groupName, reading, value );
-
+#endif
         EnqueueToFhem ( buffer );
     }
 
@@ -805,8 +831,11 @@ void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char
 
     if ( fhemActive ) {
         char buffer [ 128 ];
+#ifdef ENABLE_BULK_UPDATE1
+	    snprintf ( buffer, 128, "{pushupd('%s^%s^%f')}\n", groupName, reading, value );
+#else
         snprintf ( buffer, 128, "setreading %s %s %f\n", groupName, reading, value );
-
+#endif
         EnqueueToFhem ( buffer );
     }
 
@@ -1535,7 +1564,12 @@ PushDevice * PushBridge::GetPushDevice ( uint64_t mac, bool update, bool checkCf
 				DEBUGV2 ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << name );
 				DEBUGV ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << name );
 #endif
+
+#ifdef ENABLE_BULK_UPDATE1
+	            snprintf ( cmd, 128, "{pushupd('%s^reachable^1^_reachable^1')}\n", name );
+#else
 				snprintf ( cmd, 128, "setreading %s reachable 1\nsetreading %s _reachable 1\n", name, name );
+#endif
 				EnqueueToFhem ( cmd );
 			}
 #ifdef ENABLE_REACHABLE_TIMER
@@ -1577,6 +1611,31 @@ void PushBridge::UpdatePushDevice ( PushDevice * device )
 
             char cmd [ 512 ];
 
+#ifdef ENABLE_BULK_UPDATE
+			const NodeDescriptor & desc = node->nodeDescriptor ();
+
+			snprintf ( cmd, 512, "{pushupd('%s^userDescriptor^%s^"
+				"deviceTypeString^%s^"
+				"manufacturerCode^%i^deviceType^%i^"
+				"macCapabilities^%i^"
+				"isFullFunctionDevice^%i^"
+				"isMainsPowered^%i^"
+				"receiverOnWhenIdle^%i^"
+				"securitySupport^%i^"
+				"frequencyBandString^%s"
+				"')}\n",
+				name, qPrintable ( node->userDescriptor () ),
+				qPrintable ( node->deviceTypeString () ),
+				desc.manufacturerCode (),
+				( int ) desc.deviceType (),
+				( int ) desc.macCapabilities (),
+				desc.isFullFunctionDevice () ? 1 : 0,
+				desc.isMainsPowered () ? 1 : 0,
+				desc.receiverOnWhenIdle () ? 1 : 0,
+				desc.securitySupport () ? 1 : 0,
+				desc.frequencyBandString ()
+			);
+#else
             snprintf ( cmd, 512,
                 "setreading %s userDescriptor %s\n"
                 "setreading %s deviceTypeString %s\n",
@@ -1603,6 +1662,7 @@ void PushBridge::UpdatePushDevice ( PushDevice * device )
                 name, desc.securitySupport() ? 1 : 0,
                 name, desc.frequencyBandString()
                 );
+#endif
             EnqueueToFhem ( cmd );
         }
     }
@@ -1832,8 +1892,11 @@ void PushBridge::apsdeDataIndication ( const deCONZ::ApsDataIndication & ind )
 
                         char cmd [ 128 ];
 
+#ifdef ENABLE_BULK_UPDATE1
+	                    snprintf ( cmd, 128, "{pushupd('%s^button%i^%i^buttonLast^%i')}\n", name, btn, seq, btn );
+#else
                         snprintf ( cmd, 128, "setreading %s button%i %i\nsetreading %s buttonLast %i\n", name, btn, seq, name, btn );
-
+#endif
                         EnqueueToFhem ( cmd );
                     }
 #ifdef DEBUG
@@ -2077,6 +2140,28 @@ void RestNodeBase::UpdateToFhem ( PushDevice * device )
     {
 	    char cmd [ 256 ];
 
+#ifdef ENABLE_BULK_UPDATE
+		snprintf ( cmd, 256, "{pushupd('%s^id^%s^"
+			"uid^%s^"
+			"available^%i"
+#ifdef DEBUG
+			"^mgmtBindSupported^%i^"
+			"read^%i^"
+			"lastAttributeReportBind^%i"
+#endif
+			"')}\n"
+			,
+			name, qPrintable ( m_id ),
+			qPrintable ( m_uid ),
+			( int ) m_available
+#ifdef DEBUG
+			,
+			( int ) m_mgmtBindSupported,
+			( int ) m_read,
+			( int ) m_lastAttributeReportBind
+#endif
+		);
+#else
 		snprintf ( cmd, 256, "setreading %s id %s\n"
 			"setreading %s uid %s\n"
 			"setreading %s available %i\n"
@@ -2096,7 +2181,7 @@ void RestNodeBase::UpdateToFhem ( PushDevice * device )
 			name, ( int ) m_lastAttributeReportBind
 #endif
 		);
-
+#endif
 		pushBridge.EnqueueToFhem ( cmd );
 	}
 }
@@ -2124,6 +2209,41 @@ void LightNode::UpdateToFhem ( PushDevice * device )
             return;
         }
 
+#ifdef ENABLE_BULK_UPDATE
+		snprintf ( cmd, 1024, "{pushupd('%s^manufacturer^%s^"
+			"modelId^%s^"
+			"swBuildId^%s^"
+			"type^%s^"
+			"manufacturerCode^%i^"
+			"clusterId^%i^"
+#ifdef DEBUG
+			"resetRetryCount^%i^"
+			"zdpResetSeq^%i^"
+#endif
+			"groupCapacity^%i^"
+			"on^%i^"
+			"level^%i^"
+			"groupCount^%i^"
+			"sceneCapacity^%i"
+			"')}\n",
+			name, qPrintable ( m_manufacturer ),
+			qPrintable ( m_modelId ),
+			qPrintable ( m_swBuildId ),
+			qPrintable ( m_type ),
+			( int ) m_manufacturerCode,
+			( int ) m_otauClusterId,
+#ifdef DEBUG
+			( int ) m_resetRetryCount,
+			( int ) m_zdpResetSeq,
+#endif
+			( int ) m_groupCapacity,
+			( int ) m_isOn,
+			( int ) m_level,
+			( int ) m_groupCount,
+			( int ) m_sceneCapacity
+		);
+
+#else
 		snprintf ( cmd, 1024, "setreading %s manufacturer %s\n"
 			"setreading %s modelId %s\n"
 			"setreading %s swBuildId %s\n"
@@ -2155,13 +2275,39 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 			name, ( int ) m_groupCount,
 			name, ( int ) m_sceneCapacity
 		);
-
+#endif
 		pushBridge.EnqueueToFhem ( cmd );
 		
 		RestNodeBase::UpdateToFhem ( device );
 
         if ( device->type != PUSH_TYPE_PLUG )
         {
+#ifdef ENABLE_BULK_UPDATE
+			snprintf ( cmd, 1024, "{pushupd('%s^hasColor^%i^"
+                "hue^%i^"
+                "ehue^%i^"
+                "normHue^%f^"
+                "sat^%i^"
+                "colorX^%i^"
+                "colorY^%i^"
+                "colorTemperature^%i^"
+                "colorMode^%s^"
+                "colorLoopActive^%i^"
+				"colorLoopSpeed^%i"
+				"')}\n",
+				name, m_hasColor ? 1 : 0,
+				( int ) m_hue,
+				( int ) m_ehue,
+				m_normHue,
+				( int ) m_sat,
+				( int ) m_colorX,
+				( int ) m_colorY,
+				( int ) m_colorTemperature,
+				m_colorMode.length () ? qPrintable ( m_colorMode ) : "undef",
+				m_colorLoopActive ? 1 : 0,
+				m_colorLoopSpeed
+			);
+#else
             snprintf ( cmd, 1024, "setreading %s hasColor %i\n"
                 "setreading %s hue %i\n"
                 "setreading %s ehue %i\n"
@@ -2185,6 +2331,7 @@ void LightNode::UpdateToFhem ( PushDevice * device )
                 name, m_colorLoopActive ? 1 : 0,
                 name, m_colorLoopSpeed
             );
+#endif
 
             pushBridge.EnqueueToFhem ( cmd );
         }
@@ -2212,6 +2359,36 @@ void Sensor::UpdateToFhem ( PushDevice * device )
              || !m_swversion.length () ) {
             return;
         }
+
+#ifdef ENABLE_BULK_UPDATE
+		snprintf ( cmd, 512, "{pushupd('%s^deletedstate^%i^"
+			"name^%s^"
+			"type^%s^"
+			"modelid^%s^"
+			"manufacturer^%s^"
+			"swversion^%s^"
+			"mode^%i^"
+#ifdef DEBUG
+			"resetRetryCount^%i^"
+			"zdpResetSeq^%i^"
+#endif
+			"etag^%s"
+			"')}\n",
+			name, ( int ) m_deletedstate,
+			qPrintable ( m_name ),
+			qPrintable ( m_type ),
+			qPrintable ( m_modelid ),
+			qPrintable ( m_manufacturer ),
+			qPrintable ( m_swversion ),
+			m_mode,
+#ifdef DEBUG
+			m_resetRetryCount,
+			m_zdpResetSeq,
+#endif
+			etag.length () ? qPrintable ( etag ) : "undef"
+		);
+
+#else
 		snprintf ( cmd, 512, "setreading %s deletedstate %i\n"
 			"setreading %s name %s\n"
 			"setreading %s type %s\n"
@@ -2237,6 +2414,7 @@ void Sensor::UpdateToFhem ( PushDevice * device )
 #endif
 			name, etag.length () ? qPrintable ( etag ) : "undef"
 		);
+#endif
 
 		pushBridge.EnqueueToFhem ( cmd );
 
@@ -2285,6 +2463,20 @@ void SensorState::UpdateToFhem ( PushDevice * device )
     {
 	    char cmd [ 512 ];
 
+#ifdef ENABLE_BULK_UPDATE
+		snprintf ( cmd, 512, "{pushupd('%s^lastupdated^%s^"
+			"flag^%s^"
+			"status^%s^"
+			"open^%s^"
+			"lux^%i"
+			"')}\n",
+			name, m_lastupdated.length () ? qPrintable ( m_lastupdated ) : "undef",
+			m_flag.length () ? qPrintable ( m_flag ) : "undef",
+			m_status.length () ? qPrintable ( m_status ) : "undef",
+			m_open.length () ? qPrintable ( m_open ) : "undef",
+			m_lux
+		);
+#else
 		snprintf ( cmd, 512, "setreading %s lastupdated %s\n"
 			"setreading %s flag %s\n"
 			"setreading %s status %s\n"
@@ -2296,10 +2488,23 @@ void SensorState::UpdateToFhem ( PushDevice * device )
 			name, m_open.length () ? qPrintable ( m_open ) : "undef",
 			name, m_lux
 		);
+#endif
 		pushBridge.EnqueueToFhem ( cmd );
 
         if ( m_pushDevice && m_pushDevice->type != PUSH_TYPE_SWITCH )
         {
+#ifdef ENABLE_BULK_UPDATE
+			snprintf ( cmd, 512, "{pushupd('%s^presence^%s^"
+                "temperature^%s^"
+                "humidity^%s^"
+				"daylight^%s"
+				"')}\n",
+				name, m_presence.length () ? qPrintable ( m_presence ) : "undef",
+				m_temperature.length () ? qPrintable ( m_temperature ) : "undef",
+				m_humidity.length () ? qPrintable ( m_humidity ) : "undef",
+				m_daylight.length () ? qPrintable ( m_daylight ) : "undef"
+			);
+#else
             snprintf ( cmd, 512, "setreading %s presence %s\n"
                 "setreading %s temperature %s\n"
                 "setreading %s humidity %s\n"
@@ -2309,6 +2514,7 @@ void SensorState::UpdateToFhem ( PushDevice * device )
                 name, m_humidity.length () ? qPrintable ( m_humidity ) : "undef",
                 name, m_daylight.length () ? qPrintable ( m_daylight ) : "undef"
             );
+#endif
             pushBridge.EnqueueToFhem ( cmd );
         }
 	}
@@ -2327,6 +2533,20 @@ void SensorConfig::UpdateToFhem ( PushDevice * device )
 
         DEBUGFTRACE ( "SensorConfig::UpdateToFhem 1" );
 
+#ifdef ENABLE_BULK_UPDATE
+		snprintf ( cmd, 512, "{pushupd('%s^on^%i^"
+			"reachable^%i^"
+			"duration^%f^"
+			"battery^%i^"
+			"url^%s"
+			"')}\n",
+			name, m_on ? 1 : 0,
+			m_reachable ? 1 : 0,
+			m_duration,
+			m_battery,
+			m_url.length () ? qPrintable ( m_url ) : "undef"
+		);
+#else
 		snprintf ( cmd, 512, "setreading %s on %i\n"
 			"setreading %s reachable %i\n"
 			"setreading %s duration %f\n"
@@ -2338,11 +2558,24 @@ void SensorConfig::UpdateToFhem ( PushDevice * device )
 			name, m_battery,
 			name, m_url.length () ? qPrintable ( m_url ) : "undef"
 		);
+#endif
 
 		pushBridge.EnqueueToFhem ( cmd );
 		
 		if ( m_pushDevice && m_pushDevice->type != PUSH_TYPE_SWITCH )
 		{
+#ifdef ENABLE_BULK_UPDATE
+			snprintf ( cmd, 512, "{pushupd('%s^longitude^%s^"
+				"latitude^%s^"
+				"sunriseoffset^%s^"
+				"sunsetoffset^%s"
+				"')}\n",
+				name, m_long.length () ? qPrintable ( m_long ) : "undef",
+				m_lat.length () ? qPrintable ( m_lat ) : "undef",
+				m_sunriseoffset.length () ? qPrintable ( m_sunriseoffset ) : "undef",
+				m_sunsetoffset.length () ? qPrintable ( m_sunsetoffset ) : "undef"
+			);
+#else
 			snprintf ( cmd, 512, "setreading %s longitude %s\n"
 				"setreading %s latitude %s\n"
 				"setreading %s sunriseoffset %s\n"
@@ -2352,6 +2585,8 @@ void SensorConfig::UpdateToFhem ( PushDevice * device )
 				name, m_sunriseoffset.length () ? qPrintable ( m_sunriseoffset ) : "undef",
 				name, m_sunsetoffset.length () ? qPrintable ( m_sunsetoffset ) : "undef"
 			);
+#endif
+			pushBridge.EnqueueToFhem ( cmd );
 		}
 	}
 }

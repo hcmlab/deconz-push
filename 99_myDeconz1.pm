@@ -76,7 +76,7 @@ deCONZ_build_config
 
 		my $manufacturer = $bridge->{manufacturer};
 
-		if ( index ( $manufacturer, 'dresden' ) >= 0 ) {
+		if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
 			Log3 $name, 4, "$funn: Bridge found!";
 
 			my $tempval = ReadingsVal ( $key, 'push', $enable_push );
@@ -244,6 +244,56 @@ deCONZ_build_config
 
 
 
+sub
+pushupd
+{
+	my $name = 'RaspBridge';
+	my $funn = 'pushupd';
+
+	my $raw = $_[0];
+
+	my @raws = split /\^/, $raw;
+
+	my $size = $#raws + 1;
+
+	if ( $size < 3 ) {
+		#Log3 $name, 1, "$funn: Invalid size $size";
+		return;
+	}
+
+	my $device 	= $raws[0];
+	my $dev 	= $defs{$device};
+
+	if ( !defined ( $dev ) ) {
+		#Log3 $name, 1, "$funn: Device $device not found";
+		return;
+	}
+
+	if ( $size > 3 ) {
+		readingsBeginUpdate ( $dev );
+
+		my $cur = 1;
+
+		while ( ($cur + 1) < $size )
+		{
+			readingsBulkUpdate ( $dev, $raws[$cur], $raws[$cur + 1] );
+
+			#Log3 $name, 1, "$funn: " . $device . '.' . $raws[$cur] . ' ' . $raws[$cur + 1];
+
+			$cur += 2;
+		}
+
+		# If we have more than 4 updates, then we assume a complete object update.
+		# No need to invoke notifies.
+		readingsEndUpdate ( $dev, ( $size > 9 ? 0 : 1 ) );
+	}
+	else {
+		readingsSingleUpdate ( $dev, $raws[1], $raws[2], 1 );
+
+		#Log3 $name, 1, "$funn: " . $device . '.' . $raws[1] . ' ' . $raws[2];
+	}
+	return;
+}
 
 
 
