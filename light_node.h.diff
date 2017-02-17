@@ -1,11 +1,11 @@
---- ./deconz-rest-plugin/light_node.h	2016-12-28 21:57:34.207658398 +0100
-+++ ./light_node.h	2016-12-28 15:00:39.302910588 +0100
+--- ./deconz-rest-plugin/light_node.h	2017-02-18 00:29:09.617999771 +0100
++++ ./light_node.h	2017-02-17 20:59:07.157149448 +0100
 @@ -84,6 +84,8 @@
  
      QString etag;
  
-+    pushClassMethod ()
-+    
++	pushClassMethod ()
++
  private:
      State m_state;
      uint8_t m_resetRetryCount;

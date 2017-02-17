@@ -1,5 +1,5 @@
---- ./deconz-rest-plugin/group.cpp	2016-12-28 21:57:34.207658398 +0100
-+++ ./group.cpp	2016-12-28 20:46:19.832733185 +0100
+--- ./deconz-rest-plugin/group.cpp	2017-02-18 00:29:09.617999771 +0100
++++ ./group.cpp	2017-02-17 20:59:07.157149448 +0100
 @@ -10,6 +10,7 @@
  
  #include "group.h"
@@ -22,11 +22,11 @@
  {
      m_on = on;
 +
-+    if ( on ) {
-+	    pushUpdateGroupInfo ();
-+    }
++	if ( on ) {
++		pushUpdateGroupInfo ();
++	}
 +
-+    pushBridge.SetGroupInfo ( m_name, m_id, "on", ( uint32_t ) ( on ? 1 : 0 ) );
++	pushBridge.SetGroupInfo ( m_name, m_id, "on", ( uint32_t ) ( on ? 1 : 0 ) );
  }
  
  /*! Sets the group color loop active state.

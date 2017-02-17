@@ -617,12 +617,12 @@ void PushBridge::SetNodeAvailable ( void * restNode, bool available )
         DEBUGV1 ( "SetNodeAvailable: Reachable " << reachable << " to device:" << name );
 
 #ifdef ENABLE_BULK_UPDATE
-		snprintf ( cmd, 256, "{pushupd('%s^reachable^%i^_reachable^%i^available^%i')}\n"
-        , name, reachable, reachable, reachable );
+		snprintf ( cmd, 256, "{pushupd('%s^reachable^%i^available^%i')}\n"
+        , name, reachable, reachable );
 #else
-        snprintf ( cmd, 256, "setreading %s reachable %i\nsetreading %s _reachable %i\n"
+        snprintf ( cmd, 256, "setreading %s reachable %i\n"
             "setreading %s available %i\n"
-        , name, reachable, name, reachable, name, reachable );
+        , name, reachable, name, reachable );
 #endif
         EnqueueToFhem ( cmd );
     }
@@ -756,7 +756,7 @@ void PushBridge::SetNodeInfoDouble ( void * restNode, int type, const char * rea
 }
 
 
-void PushBridge::SetNodeState ( void * restNode, int type, bool reading )
+void PushBridge::SetNodeState ( void * restNode, int type, bool reading, int level )
 {
     DEBUGFTRACE ( "SetNodeState" );
     if ( !restNode )
@@ -778,12 +778,23 @@ void PushBridge::SetNodeState ( void * restNode, int type, bool reading )
     DEBUGFTRACE ( "SetNodeState " << GetNodeType ( device->type ) << ": " << name << " " << reading );
 
     char buffer [ 256 ];
-#ifdef ENABLE_BULK_UPDATE
-	snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0 );
+#ifdef ENABLE_BULK_UPDATE	
+	if ( level >= 0 ) {
+		int slevel = reading ? level : 0;
+		int spct = reading ? ( ( level * 100 ) / 253 ) : 0;
+		
+		snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d^level^%d^bri^%d^pct^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0, slevel, slevel, spct );
+	}
+	else {
+		snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0 );
+	}
 #else
     snprintf ( buffer, 256, "setreading %s state %s\nsetreading %s onoff %d\n", name, reading ? "on" : "off", name, reading ? 1 : 0 );
 #endif
     EnqueueToFhem ( buffer );
+    
+    //if ( device->node )
+	//	apsInst->updateNode ( *device->node );
 }
 
 
@@ -919,6 +930,10 @@ void PushGroup::Update ( QString & id, bool o, uint16_t x, uint16_t y, uint16_t 
     if ( level != l ) {
         level = l;
         pushBridge.SetGroupInfo ( groupName, id, "level", ( uint32_t ) l );
+        pushBridge.SetGroupInfo ( groupName, id, "bri", ( uint32_t ) l );
+        
+		int pct = l ? ( ( l * 100 ) / 253 ) : 0;
+        pushBridge.SetGroupInfo ( groupName, id, "pct", ( uint32_t ) pct );
     }
 
     if ( colorTemperature != temp ) {
@@ -1566,9 +1581,9 @@ PushDevice * PushBridge::GetPushDevice ( uint64_t mac, bool update, bool checkCf
 #endif
 
 #ifdef ENABLE_BULK_UPDATE1
-	            snprintf ( cmd, 128, "{pushupd('%s^reachable^1^_reachable^1')}\n", name );
+	            snprintf ( cmd, 128, "{pushupd('%s^reachable^1')}\n", name );
 #else
-				snprintf ( cmd, 128, "setreading %s reachable 1\nsetreading %s _reachable 1\n", name, name );
+				snprintf ( cmd, 128, "setreading %s reachable 1\n", name );
 #endif
 				EnqueueToFhem ( cmd );
 			}
@@ -2102,7 +2117,7 @@ void PushBridge::TimerAlive ()
                         DEBUGV ( "TimerAlive: Reachable 0 to device:" << name << " ms:" << diff );
                         DEBUGV1 ( "TimerAlive: Reachable 0 to device:" << name << " ms:" << diff );
 
-                        snprintf ( cmd, 128, "setreading %s reachable 0\nsetreading %s _reachable 0\n", name, name );
+                        snprintf ( cmd, 128, "setreading %s reachable 0\n", name );
 
                         EnqueueToFhem ( cmd );
 
@@ -2209,7 +2224,9 @@ void LightNode::UpdateToFhem ( PushDevice * device )
             return;
         }
 
-#ifdef ENABLE_BULK_UPDATE
+		int pct = m_isOn ? ( ( m_level * 100 ) / 253 ) : 0;
+		
+#ifdef ENABLE_BULK_UPDATE		
 		snprintf ( cmd, 1024, "{pushupd('%s^manufacturer^%s^"
 			"modelId^%s^"
 			"swBuildId^%s^"
@@ -2223,6 +2240,8 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 			"groupCapacity^%i^"
 			"on^%i^"
 			"level^%i^"
+			"bri^%i^"
+			"pct^%i^"
 			"groupCount^%i^"
 			"sceneCapacity^%i"
 			"')}\n",
@@ -2239,6 +2258,8 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 			( int ) m_groupCapacity,
 			( int ) m_isOn,
 			( int ) m_level,
+			( int ) m_level,
+			( int ) pct,
 			( int ) m_groupCount,
 			( int ) m_sceneCapacity
 		);
@@ -2257,6 +2278,8 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 			"setreading %s groupCapacity %i\n"
 			"setreading %s on %i\n"
 			"setreading %s level %i\n"
+			"setreading %s bri %i\n"
+			"setreading %s pct %i\n"
 			"setreading %s groupCount %i\n"
 			"setreading %s sceneCapacity %i\n",
 			name, qPrintable ( m_manufacturer ),
@@ -2272,6 +2295,8 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 			name, ( int ) m_groupCapacity,
 			name, ( int ) m_isOn,
 			name, ( int ) m_level,
+			name, ( int ) m_level,
+			name, ( int ) pct,
 			name, ( int ) m_groupCount,
 			name, ( int ) m_sceneCapacity
 		);

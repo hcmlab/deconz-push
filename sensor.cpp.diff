@@ -1,11 +1,11 @@
---- ./deconz-rest-plugin/sensor.cpp	2016-12-28 21:57:34.207658398 +0100
-+++ ./sensor.cpp	2016-12-28 17:07:36.603745837 +0100
+--- ./deconz-rest-plugin/sensor.cpp	2017-02-18 00:29:09.627999722 +0100
++++ ./sensor.cpp	2017-02-17 22:50:08.592855261 +0100
 @@ -137,6 +137,8 @@
      sensorTypes.append("ZHASwitch");
      sensorTypes.append("ZHALight");
      sensorTypes.append("ZHAPresence");
 +
-+    pushCode ( m_pushType = PUSH_TYPE_SWITCH );
++	pushCode ( m_pushType = PUSH_TYPE_SWITCH );
  }
  
  /*! Returns the sensor deleted state.
@@ -14,13 +14,13 @@
  {
      m_name = name;
 +
-+    pushSetNodeInfo ( name );
++	pushSetNodeInfo ( name );
  }
  
  /*! Returns the sensor mode (Lighting Switch).
 @@ -187,6 +191,8 @@
   */
- void Sensor::setMode(const uint8_t &mode)
+ void Sensor::setMode(SensorMode mode)
  {
 +	pushSetNodeInfoMemComp ( mode );
 +
@@ -40,7 +40,7 @@
   */
  void Sensor::setModelId(const QString &mid)
  {
-+	pushSetNodeInfoCompName ( m_modelid, mid.trimmed(), "modelid" );
++	pushSetNodeInfoCompName ( m_modelid, mid.trimmed (), "modelid" );
 +
      m_modelid = mid.trimmed();
  }
@@ -85,9 +85,9 @@
  void Sensor::setState(const SensorState &state)
  {
      m_state = state;
-+    
++
 +#ifdef ENABLE_PUSH
-+    if ( id ().length () > 0 ) {
++	if ( id ().length () > 0 ) {
 +		int val = id ().toInt ();
 +
 +		m_state.m_pushId = val;
@@ -101,9 +101,9 @@
  void Sensor::setConfig(const SensorConfig &config)
  {
      m_config = config;
-+    
++
 +#ifdef ENABLE_PUSH
-+    if ( id ().length () > 0 ) {
++	if ( id ().length () > 0 ) {
 +		int val = id ().toInt ();
 +
 +		m_state.m_pushId = val;
@@ -126,7 +126,7 @@
  {
      m_lastupdated = lastupdated;
 +
-+    pushSetSensorStateInfo ( lastupdated );
++	pushSetSensorStateInfo ( lastupdated );
  }
  
  /*! Returns the sensor state flag attribute.
@@ -135,7 +135,7 @@
  {
      m_flag = flag;
 +
-+    pushSetSensorStateInfo ( flag );
++	pushSetSensorStateInfo ( flag );
  }
  
  /*! Returns the sensor state status attribute.
@@ -144,7 +144,7 @@
  {
      m_status = status;
 +
-+    pushSetSensorStateInfo ( status );
++	pushSetSensorStateInfo ( status );
  }
  
  /*! Returns the sensor state presence attribute.
@@ -153,7 +153,7 @@
  {
      m_presence = presence;
 +
-+    pushSetSensorStateInfo ( presence );
++	pushSetSensorStateInfo ( presence );
  }
  
  /*! Returns the sensor state open attribute.
@@ -162,7 +162,7 @@
  {
      m_open = open;
 +
-+    pushSetSensorStateInfo ( open );
++	pushSetSensorStateInfo ( open );
  }
  
  /*! Returns the sensor state buttonevent attribute.
@@ -171,7 +171,7 @@
  {
      m_buttonevent = buttonevent;
 +
-+    pushSetSensorStateInfo ( buttonevent );
++	pushSetSensorStateInfo ( buttonevent );
  }
  
  /*! Returns the sensor state temperature attribute.
@@ -180,7 +180,7 @@
  {
      m_temperature = temperature;
 +
-+    pushSetSensorStateInfo ( temperature );
++	pushSetSensorStateInfo ( temperature );
  }
  
  /*! Returns the sensor state humidity attribute.
@@ -189,7 +189,7 @@
  {
      m_humidity = humidity;
 +
-+    pushSetSensorStateInfo ( humidity );
++	pushSetSensorStateInfo ( humidity );
  }
  
  /*! Returns the sensor state daylight attribute.
@@ -198,7 +198,7 @@
  {
      m_daylight = daylight;
 +
-+    pushSetSensorStateInfo ( daylight );
++	pushSetSensorStateInfo ( daylight );
  }
  
  /*! Returns the sensor state lux attribute.
@@ -231,7 +231,7 @@
  {
      m_on = on;
 +
-+    pushSetSensorConfigState ( on );
++	pushSetSensorConfigState ( on, -1 );
  }
  
  /*! Returns the sensor config reachable attribute.
@@ -240,7 +240,7 @@
  {
      m_reachable = reachable;
 +
-+    pushSetSensorConfigInfo ( reachable );
++	pushSetSensorConfigInfo ( reachable );
  }
  
  /*! Returns the sensor config duration attribute.
@@ -253,36 +253,34 @@
          m_duration = duration;
      }
  }
-@@ -698,7 +764,10 @@
+@@ -698,6 +764,8 @@
   */
  void SensorConfig::setBattery(quint8 battery)
  {
-+	pushSetSensorConfigInfoMemComp  ( battery );
++	pushSetSensorConfigInfoMemComp ( battery );
 +
      m_battery = battery;
-+
  }
  
- /*! Returns the sensor config url attribute.
-@@ -716,6 +785,8 @@
+@@ -716,6 +784,8 @@
  void SensorConfig::setUrl(const QString &url)
  {
      m_url = url;
 +
-+    pushSetSensorConfigInfo ( url );
++	pushSetSensorConfigInfo ( url );
  }
  
  /*! Returns the sensor config longitude attribute.
-@@ -733,6 +804,8 @@
+@@ -733,6 +803,8 @@
  void SensorConfig::setLongitude(const QString &longitude)
  {
      m_long = longitude;
 +
-+    pushSetSensorConfigInfo ( longitude );
++	pushSetSensorConfigInfo ( longitude );
  }
  
  /*! Returns the sensor config lat attribute.
-@@ -750,6 +823,8 @@
+@@ -750,6 +822,8 @@
  void SensorConfig::setLat(const QString &lat)
  {
      m_lat = lat;
@@ -291,20 +289,19 @@
  }
  
  /*! Returns the sensor config sunriseoffset attribute.
-@@ -767,6 +842,8 @@
+@@ -767,6 +841,8 @@
  void SensorConfig::setSunriseoffset(const QString &sunriseoffset)
  {
      m_sunriseoffset = sunriseoffset;
 +
-+    pushSetSensorConfigInfo ( sunriseoffset );
++	pushSetSensorConfigInfo ( sunriseoffset );
  }
  
  /*! Returns the sensor config sunsetoffset attribute.
-@@ -784,4 +861,7 @@
+@@ -784,4 +860,6 @@
  void SensorConfig::setSunsetoffset(const QString &sunsetoffset)
  {
      m_sunsetoffset = sunsetoffset;
 +
-+    pushSetSensorConfigInfo ( sunsetoffset );
++	pushSetSensorConfigInfo ( sunsetoffset );
  }
-+

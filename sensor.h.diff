@@ -1,15 +1,15 @@
---- ./deconz-rest-plugin/sensor.h	2016-12-28 21:57:34.207658398 +0100
-+++ ./sensor.h	2016-12-28 16:45:04.080169286 +0100
-@@ -45,6 +45,8 @@
+--- ./deconz-rest-plugin/sensor.h	2017-02-18 00:29:09.627999722 +0100
++++ ./sensor.h	2017-02-17 20:59:07.167149398 +0100
+@@ -46,6 +46,8 @@
      void setLux(quint32 lux);
      void updateTime();
  
 +	pushClassSensorExt ()
-+    
++
  private:
      QString m_lastupdated;
      QString m_flag;//bool
-@@ -85,6 +87,8 @@
+@@ -86,6 +88,8 @@
      const QString &sunsetoffset() const;
      void setSunsetoffset(const QString &sunsetoffset);
  
@@ -18,11 +18,11 @@
  private:
      bool m_on;
      bool m_reachable;
-@@ -168,6 +172,8 @@
+@@ -176,6 +180,8 @@
      QVector<QString> sensorTypes;
      QString etag;
  
-+    pushClassMethodSensor ()
++	pushClassMethodSensor ()
 +
  private:
      DeletedState m_deletedstate;

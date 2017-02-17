@@ -157,7 +157,7 @@ public:
     void                        SetNodeInfo			( void * restNode, int type, const char * reading, uint32_t value );
     void                        SetNodeInfo			( void * restNode, QString & device, const char * reading, uint32_t value );
     void                        SetNodeInfoDouble   ( void * restNode, int type, const char * reading, double value );
-    void                        SetNodeState		( void * restNode, int type, bool value );
+    void                        SetNodeState		( void * restNode, int type, bool value, int pct );
 
 	void                        SetGroupInfo		( QString & groupName, QString & id, const char * reading, uint32_t value );
 	void                        SetGroupInfo		( const char * groupName, QString & id, const char * reading, uint32_t value );
@@ -259,7 +259,7 @@ extern PushBridge pushBridge;
 
 #define pushCode(code)					code
 
-#define pushSetNodeState(s)				if ( pushBridge.enable_plugin ) pushBridge.SetNodeState ( this, 0, s )
+#define pushSetNodeState(s,l)				if ( pushBridge.enable_plugin ) pushBridge.SetNodeState ( this, 0, s, l )
 #define pushSetNodeInfo(v)				if ( pushBridge.enable_plugin ) pushBridge.SetNodeInfo ( this, 0, #v, v )
 #define pushSetNodeInfoName(v,n)		if ( pushBridge.enable_plugin ) pushBridge.SetNodeInfo ( this, 0, n, v )
 #define pushSetNodeInfoComp(a,v)		if ( pushBridge.enable_plugin ) { if ( a != v ) { a = v; pushBridge.SetNodeInfo ( this, 0, #v, v ); } return; }
@@ -276,7 +276,7 @@ extern PushBridge pushBridge;
 #define pushSetSensorStateInfoMem(n)    if ( pushBridge.enable_plugin ) pushBridge.SetNodeInfo ( this, 1, #n, m_##n )
 #define pushSetSensorStateInfoMemComp(v) if ( pushBridge.enable_plugin ) { if ( m_##v != v ) { m_##v = v; pushBridge.SetNodeInfo ( this, 1, #v, v ); } return; }
 
-#define pushSetSensorConfigState(s)     if ( pushBridge.enable_plugin ) pushBridge.SetNodeState ( this, 2, s )
+#define pushSetSensorConfigState(s,l)     if ( pushBridge.enable_plugin ) pushBridge.SetNodeState ( this, 2, s, l )
 #define pushSetSensorConfigInfo(v)		if ( pushBridge.enable_plugin ) pushBridge.SetNodeInfo ( this, 2, #v, v )
 #define pushSetSensorConfigInfoName(v,n)  if ( pushBridge.enable_plugin ) pushBridge.SetNodeInfo ( this, 2, n, v )
 #define pushSetSensorConfigInfoMemComp(v) if ( pushBridge.enable_plugin ) { if ( m_##v != v ) { m_##v = v; pushBridge.SetNodeInfo ( this, 2, #v, v ); } return; }
@@ -307,7 +307,7 @@ extern PushBridge pushBridge;
 
 #define pushCode(code)
 
-#define pushSetNodeState(s) 
+#define pushSetNodeState(s,l) 
 #define pushSetNodeInfo(v)
 #define pushSetNodeInfoName(v,n)
 #define pushSetNodeInfoComp(a,v) 
