@@ -21,6 +21,8 @@ Requirements for FHEM
   1. FHEM installation on RaspBerry Pi<br/>
   2. ZigBee devices are managed by deCONZ and included into FHEM as type HUEDevice<br/>
   3. The deCONZ application and FHEM run on the same RaspBerry<br/>
+  3.1 deCONZ 2.04.35<br/>
+  3.2 deCONZ 2.04.18 (checkout branch 2.04.18)<br/>
   4. Telnet in fhem is enabled<br/>
   4.1 Authentication/SSL on telnet is NOT supported yet<br/>
 <br>
@@ -42,6 +44,10 @@ git clone https://hcm-lab.de/git/project/deconz-push.git
 cd deconz-push
 ```
 <br>
+If you're not using the recent deCONZ release, then checkout a branch that macht your version, e.g.
+```bash
+git checkout 2.04.18
+```
 
 **3.** OPTIONAL. For FHEM: Path to fhem home<br>
 If FHEM is not installed in /opt/fhem, then you must provide the path through the following command:
