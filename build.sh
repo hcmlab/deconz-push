@@ -130,6 +130,8 @@ if [ $RELB == 1 ]; then
 	cd ./deconz-rest-plugin
 	[ $? != 0 ] && echo 'Cannot access directory ./deconz-rest-plugin ...' && exit 1
 	
+	git stash
+	git pull
 	# version to 2.04.18
 	#git reset --hard b8393233a76fadf28a796f626c3aef428fbd4a47
 	# version to 2.04.35
