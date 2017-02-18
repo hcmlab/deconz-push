@@ -16,6 +16,7 @@
 
 MKEXT=
 DBG=$1
+DLNEW=$2
 [ "$RELB" == "" ] && RELB=1
 [ -e "./.dbg" ] && RELB=0
 
@@ -107,7 +108,7 @@ fi
 
 DECINC=/usr/include/deconz
 
-if [ ! -e $DECINC ]; then
+if [ ! -e $DECINC ] || [ "$DLNEW" == "1" ]; then
 	[ -e ./deconz-dev-latest.deb ] && rm ./deconz-dev-latest.deb && [ $? != 0 ] && echo 'Failed to remove old deconz-dev-latest.deb ...' && exit 1
 	
 	wget http://www.dresden-elektronik.de/rpi/deconz-dev/deconz-dev-latest.deb	
@@ -119,7 +120,10 @@ if [ ! -e $DECINC ]; then
 	[ ! -e $DECINC ] && echo 'Failed to install deconz dev latest ...' && exit 1
 fi
 
-if [ ! -e ./deconz-rest-plugin ]; then
+if [ ! -e ./deconz-rest-plugin ] || [ "$DLNEW" == "1" ]; then
+	[ -e ./deconz-rest-plugin ] && rm -rf deconz-rest-plugin
+	[ $? != 0 ] && echo 'Failed to remove old deconz rest plugin repository ...' && exit 1
+	
 	git clone https://github.com/dresden-elektronik/deconz-rest-plugin.git
 	[ $? != 0 ] && echo 'Failed to cloning deconz rest plugin repository ...' && exit 1
 fi
