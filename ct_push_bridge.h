@@ -162,6 +162,7 @@ public:
 	void                        SetGroupInfo		( QString & groupName, QString & id, const char * reading, uint32_t value );
 	void                        SetGroupInfo		( const char * groupName, QString & id, const char * reading, uint32_t value );
 	void                        SetGroupInfo		( const char * groupName, QString & id, const char * reading, float value );
+	void                        SetGroupInfo		( QString & groupName, QString & id, const char * reading, const char * value );
 
     void                        EnqueueToFhem ( const char * cmd );
     

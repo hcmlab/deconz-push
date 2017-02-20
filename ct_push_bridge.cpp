@@ -842,7 +842,7 @@ void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char
 
 void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char * reading, float value )
 {
-    DEBUGFTRACE ( "SetGroupInfo: " << groupName << " " << reading );
+    DEBUGFTRACE ( "SetGroupInfo 3: " << groupName << " " << reading );
 
     if ( fhemActive ) {
         char buffer [ 128 ];
@@ -850,6 +850,33 @@ void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char
 	    snprintf ( buffer, 128, "{pushupd('%s^%s^%f')}\n", groupName, reading, value );
 #else
         snprintf ( buffer, 128, "setreading %s %s %f\n", groupName, reading, value );
+#endif
+        EnqueueToFhem ( buffer );
+    }
+
+    if ( acceptActive  ) {
+        UpdatePushGroup ( id );
+    }
+}
+
+
+void PushBridge::SetGroupInfo ( QString & qgroupName, QString & id, const char * reading, const char * value )
+{
+    DEBUGFTRACE ( "SetGroupInfo 4: " << qPrintable ( qgroupName ) << " " << reading );
+
+    if ( fhemActive ) {
+        PushGroup * group = GetPushGroup ( qgroupName );
+        if ( !group  ) {
+            return;
+        }
+        
+        const char * groupName = group->name.c_str ();
+        
+        char buffer [ 128 ];
+#ifdef ENABLE_BULK_UPDATE1
+	    snprintf ( buffer, 128, "{pushupd('%s^%s^%s')}\n", groupName, reading, value );
+#else
+        snprintf ( buffer, 128, "setreading %s %s %s\n", groupName, reading, value );
 #endif
         EnqueueToFhem ( buffer );
     }
@@ -908,6 +935,7 @@ void PushGroup::Update ( QString & id, bool o, uint16_t x, uint16_t y, uint16_t 
 
     if ( on != o ) {
         on = o;
+        pushBridge.SetGroupInfo ( groupName, id, "reachable", ( uint32_t ) 1 );
     //    pushBridge.SetGroupInfo ( groupName, id, "on", ( uint32_t ) ( o ? 1 : 0 ) );
     }
 
