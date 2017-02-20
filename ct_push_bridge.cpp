@@ -779,19 +779,23 @@ void PushBridge::SetNodeState ( void * restNode, int type, bool reading, int lev
 
     char buffer [ 256 ];
 #ifdef ENABLE_BULK_UPDATE	
-	if ( level >= 0 ) {
+	snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0 );
+	
+    EnqueueToFhem ( buffer );
+	
+	if ( level >= 0 ) {		
 		int slevel = reading ? level : 0;
 		int spct = reading ? ( ( level * 100 ) / 253 ) : 0;
 		
-		snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d^level^%d^bri^%d^pct^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0, slevel, slevel, spct );
-	}
-	else {
-		snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0 );
+		snprintf ( buffer, 256, "{pushupd('%s^level^%d^bri^%d^pct^%d')}\n", name, slevel, slevel, spct );
+		
+		EnqueueToFhem ( buffer );
 	}
 #else
     snprintf ( buffer, 256, "setreading %s state %s\nsetreading %s onoff %d\n", name, reading ? "on" : "off", name, reading ? 1 : 0 );
-#endif
+
     EnqueueToFhem ( buffer );
+#endif
     
     //if ( device->node )
 	//	apsInst->updateNode ( *device->node );
@@ -2227,6 +2231,18 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 		int pct = m_isOn ? ( ( m_level * 100 ) / 253 ) : 0;
 		
 #ifdef ENABLE_BULK_UPDATE		
+		snprintf ( cmd, 1024, "{pushupd('%s^level^%d^"
+			"bri^%d^"
+			"pct^%d"
+			"')}\n",
+			name, 
+			( int ) m_level,
+			( int ) m_level,
+			( int ) pct
+		);
+		
+		pushBridge.EnqueueToFhem ( cmd );
+		
 		snprintf ( cmd, 1024, "{pushupd('%s^manufacturer^%s^"
 			"modelId^%s^"
 			"swBuildId^%s^"
@@ -2239,9 +2255,6 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 #endif
 			"groupCapacity^%i^"
 			"on^%i^"
-			"level^%i^"
-			"bri^%i^"
-			"pct^%i^"
 			"groupCount^%i^"
 			"sceneCapacity^%i"
 			"')}\n",
@@ -2257,9 +2270,6 @@ void LightNode::UpdateToFhem ( PushDevice * device )
 #endif
 			( int ) m_groupCapacity,
 			( int ) m_isOn,
-			( int ) m_level,
-			( int ) m_level,
-			( int ) pct,
 			( int ) m_groupCount,
 			( int ) m_sceneCapacity
 		);

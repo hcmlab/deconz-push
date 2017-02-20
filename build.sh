@@ -121,8 +121,10 @@ if [ ! -e $DECINC ] || [ "$DLNEW" == "1" ]; then
 fi
 
 if [ ! -e ./deconz-rest-plugin ] || [ "$DLNEW" == "1" ]; then
-	[ -e ./deconz-rest-plugin ] && rm -rf deconz-rest-plugin
-	[ $? != 0 ] && echo 'Failed to remove old deconz rest plugin repository ...' && exit 1
+	if [ -e ./deconz-rest-plugin ]; then
+		rm -rf deconz-rest-plugin
+		[ $? != 0 ] && echo 'Failed to remove old deconz rest plugin repository ...' && exit 1
+	fi
 	
 	git clone https://github.com/dresden-elektronik/deconz-rest-plugin.git
 	[ $? != 0 ] && echo 'Failed to cloning deconz rest plugin repository ...' && exit 1
