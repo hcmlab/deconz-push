@@ -1,5 +1,5 @@
---- ./deconz-rest-plugin/group.cpp	2017-02-18 00:29:09.617999771 +0100
-+++ ./group.cpp	2017-02-17 20:59:07.157149448 +0100
+--- ./deconz-rest-plugin/group.cpp	2017-02-21 00:16:17.168663179 +0100
++++ ./group.cpp	2017-02-20 23:57:16.294538211 +0100
 @@ -10,6 +10,7 @@
  
  #include "group.h"
@@ -17,20 +17,23 @@
      m_addr = address;
      m_id = QString::number(address);
  }
-@@ -95,6 +98,12 @@
+@@ -95,6 +98,15 @@
  void Group::setIsOn(bool on)
  {
      m_on = on;
 +
++#ifdef ENABLE_PUSH
 +	if ( on ) {
 +		pushUpdateGroupInfo ();
 +	}
 +
 +	pushBridge.SetGroupInfo ( m_name, m_id, "on", ( uint32_t ) ( on ? 1 : 0 ) );
++	pushBridge.SetGroupInfo ( m_name, m_id, "state", ( on ? "on" : "off" ) );
++#endif
  }
  
  /*! Sets the group color loop active state.
-@@ -102,6 +111,8 @@
+@@ -102,6 +114,8 @@
   */
  void Group::setColorLoopActive(bool colorLoopActive)
  {
@@ -39,7 +42,7 @@
      m_colorLoopActive = colorLoopActive;
  }
  
-@@ -177,6 +188,8 @@
+@@ -177,6 +191,8 @@
      {
          m_deviceMemberships.push_back(*i);
      }
@@ -48,7 +51,7 @@
  }
  
  /*! lightsequence to string. */
-@@ -211,6 +224,8 @@
+@@ -211,6 +227,8 @@
      {
          m_lightsequence.push_back(*i);
      }
