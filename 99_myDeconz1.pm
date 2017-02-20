@@ -50,6 +50,48 @@ get_uid_from_string
 
 
 sub
+get_uid_from_device
+{
+	my $key 	= $_[0];
+	my $device 	= $_[1];
+	my $name 	= 'RaspBridge';
+	my $funn 	= 'get_uid_from_device';
+
+	my $uniqueid = $device->{uniqueid};
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+		return $uniqueid;
+	}			
+	Log3 $name, 4, "$funn: Device $key is missing a uniqueid!";
+
+	$uniqueid = $device->{uid};
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+		return $uniqueid;
+	}
+	Log3 $name, 4, "$funn: Device $key is missing a uid!";
+	
+	my $reads = $device->{READINGS};
+	if ( !defined ( $reads ) ) {
+		Log3 $name, 4, "$funn: Device $key is missing readings!";
+		return undef;
+	}
+	
+	$uniqueid = $reads->{uniqueid}{VAL};
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+		return $uniqueid;
+	}			
+	Log3 $name, 4, "$funn: Device $key is missing a uniqueid reading!";
+	
+	$uniqueid = $reads->{uid}{VAL};
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+		return $uniqueid;
+	}
+	
+	Log3 $name, 1, "$funn: Device $key is missing a uniqueid!";
+	return undef;
+}
+
+
+sub
 deCONZ_build_config
 {
 	my $name = 'RaspBridge';
@@ -60,6 +102,7 @@ deCONZ_build_config
 	my $devices = $modules{HUEDevice}{defptr};
 	my $tport = 7072;
 	my $pport = 7073;
+	my $verbLevel = 1;
 
 	my $enable_push = 1;
 	my $enable_fhem = 1;
@@ -157,9 +200,9 @@ deCONZ_build_config
 
 		my $device = $refs{$key};
 
-		my $uniqueid = $device->{uniqueid};
+		my $uniqueid = get_uid_from_device ( $key, $device );
 		if ( !defined ( $uniqueid ) || length ( $uniqueid ) <= 0 ) {
-			Log3 $name, 4, "$funn: Device $key is missing a uniqueid!";
+			Log3 $name, 1, "$funn: Device $key is missing a uniqueid!";
 			# Check whether it is a group
 			my $def = $device->{DEF};
 			if ( defined ( $def ) && ( index ( $def, 'group' ) >= 0 ) ) 
@@ -169,7 +212,7 @@ deCONZ_build_config
 				if ( defined ( $dname ) && length ( $dname ) > 0 && defined ( $fhemname ) && length ( $fhemname ) > 0 ) 
 				{
 					$groups{$dname} = $fhemname;
-					Log3 $name, 4, "$funn: Group $dname -> $fhemname";
+					Log3 $name, 1, "$funn: Group $dname -> $fhemname";
 				}
 			}
 			next;
@@ -181,7 +224,7 @@ deCONZ_build_config
 
 		$mapping{$uid} = $fname;
 
-		Log3 $name, 4, "$funn: Device $fname -> $uniqueid ($uid)";
+		Log3 $name, 1, "$funn: Device $fname -> $uniqueid ($uid)";
 
 		my $bridge = $device->{IODev};
 		if ( defined ( $bridge ) ) 
@@ -194,7 +237,7 @@ deCONZ_build_config
 
 				if ( Scalar::Util::looks_like_number ( $uid ) ) {
 					$mapping{$uid} = $fname;					
-					Log3 $name, 4, "$funn: Bridge $fname -> $uniqueid ($uid)";
+					Log3 $name, 1, "$funn: Bridge $fname -> $uniqueid ($uid)";
 				} 
 			}
 		}
