@@ -58,13 +58,13 @@ get_uid_from_device
 	my $funn 	= 'get_uid_from_device';
 
 	my $uniqueid = $device->{uniqueid};
-	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) >= 7 ) {
 		return $uniqueid;
 	}			
 	Log3 $name, 4, "$funn: Device $key is missing a uniqueid!";
 
 	$uniqueid = $device->{uid};
-	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) >= 7 ) {
 		return $uniqueid;
 	}
 	Log3 $name, 4, "$funn: Device $key is missing a uid!";
@@ -76,13 +76,13 @@ get_uid_from_device
 	}
 	
 	$uniqueid = $reads->{uniqueid}{VAL};
-	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) >= 7 ) {
 		return $uniqueid;
 	}			
 	Log3 $name, 4, "$funn: Device $key is missing a uniqueid reading!";
 	
 	$uniqueid = $reads->{uid}{VAL};
-	if ( defined ( $uniqueid ) && length ( $uniqueid ) > 0 ) {
+	if ( defined ( $uniqueid ) && length ( $uniqueid ) >= 7 ) {
 		return $uniqueid;
 	}
 	
