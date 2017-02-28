@@ -32,18 +32,7 @@ function cmpcp
 cmpcp rest_push.conf 0
 cmpcp rest_bridge.conf 1
 
-[ -z "$FHEM_HOME" ] && FHEM_HOME=/opt/fhem
-
-if [ -e $FHEM_HOME/FHEM ]; then
-	if [ ! -e $FHEM_HOME/FHEM/99_myDeconz1.pm ]; then
-		echo 'Please restart FHEM to include 99_myDeconz1.pm';
-	fi
-	
-	sudo cp -f 99_myDeconz1.pm $FHEM_HOME/FHEM/.
-	[ $? != 0 ] && echo 'Failed to update 99_myDeconz1.pm' && exit 1
-else
-	echo 'Warning: $FHEM_HOME/FHEM not available!'
-fi
+./install-fhem.sh
 
 if [ ! -e ./bkp ]; then
 	mkdir bkp
@@ -51,6 +40,7 @@ if [ ! -e ./bkp ]; then
 	
 	cp /usr/share/deCONZ/plugins/libde_rest_plugin.so ./bkp/.
 fi
+exit 0
 
 if [ "$1" == "1" ]; then
 	[ ! -e ./libde_rest_plugin.so.dbg ] && echo 'Debug lib libde_rest_plugin.so.dbg is missing ...' && exit 1
