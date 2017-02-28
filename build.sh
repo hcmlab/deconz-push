@@ -88,8 +88,21 @@ if [ $? != 0 ]; then
     read response
     
 	[ $UPD == 0 ] && sudo apt-get update
+	UPD=1
 	sudo apt-get install -y qt4-qmake libqt4-dev
 	[ $? != 0 ] && echo 'Failed to install qt4-qmake libqt4-dev ...' && exit 1
+fi
+
+if [ ! -e "/usr/include/openssl/ssl.h" ]; then
+	echo 'It is required to install openssl development sources.'
+	echo ' '
+    echo -n "Press return to continue or Ctrl+C to abort: "
+    read response
+    
+	[ $UPD == 0 ] && sudo apt-get update
+	UPD=1
+	sudo apt-get install libssl-dev libssl1.0.0
+	[ $? != 0 ] && echo 'Failed to install libssl-dev libssl1.0.0 ...' && exit 1
 fi
 
 DECBIN=/usr/share/deCONZ

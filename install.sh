@@ -4,7 +4,7 @@
 # Copyright (C) 2016 Chi Tai Dang.
 #
 # @author	Chi-Tai Dang
-# @version	1.0
+# @version	1.1
 # @remarks
 #
 # This extension is free software; you can redistribute it and/or modify
@@ -13,13 +13,24 @@
 # http://www.eclipse.org/org/documents/epl-v10.html
 # --------------------------------------------------------------------
 
-if [ ! -e /usr/share/deCONZ/rest_push.txt ]; then
-	sudo cp -f rest_push.txt /usr/share/deCONZ/.
-	[ $? != 0 ] && echo 'Failed to install rest_push.txt' && exit 1
+function cmpcp
+{
+	if [ ! -e /usr/share/deCONZ/$1 ]; then
+		sudo cp -f $1 /usr/share/deCONZ/.
+		[ $? != 0 ] && echo "Failed to install $1" && exit 1
 	
-	sudo chmod ogu+rwx /usr/share/deCONZ/rest_push.txt
-	[ $? != 0 ] && echo 'Failed to chmod rest_push.txt' && exit 1
-fi
+		if [ $2 == 1 ]; then
+			sudo chmod ogu+rwx /usr/share/deCONZ/$1
+		else
+			sudo chmod ug+rwx /usr/share/deCONZ/$1
+			echo "Installed $1. You should update the configuration through this file."
+		fi
+		[ $? != 0 ] && echo "Failed to chmod $1" && exit 1
+	fi
+}
+
+cmpcp rest_push.conf 0
+cmpcp rest_bridge.conf 1
 
 [ -z "$FHEM_HOME" ] && FHEM_HOME=/opt/fhem
 
@@ -54,4 +65,27 @@ else
 	[ $? != 0 ] && echo 'Failed to install plugin ...' && exit 1
 fi
 
-echo 'Please restart deCONZ process now.'
+DECSTART=
+if [ -e /etc/init.d/deCONZ ]; then
+	DECSTART=/etc/init.d/deCONZ
+else
+	if [ -e /etc/init.d/deconz ]; then
+		DECSTART=/etc/init.d/deconz
+	else
+		if [ -e /etc/init.d/deConz ]; then
+			DECSTART=/etc/init.d/deConz
+		else
+			echo 'Please restart deCONZ process now.'
+		fi
+	fi
+fi
+
+if [ "$DECSTART" != "" ]; then
+	sudo $DECSTART stop
+	sudo $DECSTART start
+	
+	[ $? != 0 ] && echo 'Please restart deCONZ process now.'
+fi
+
+[ -e "/opt/fhem" ] && echo "Please enter 'reload 99_myDeconz1.pm' in the fhem command box."
+exit 0
