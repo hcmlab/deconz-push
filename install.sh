@@ -40,7 +40,7 @@ if [ ! -e ./bkp ]; then
 	
 	cp /usr/share/deCONZ/plugins/libde_rest_plugin.so ./bkp/.
 fi
-exit 0
+#exit 0
 
 if [ "$1" == "1" ]; then
 	[ ! -e ./libde_rest_plugin.so.dbg ] && echo 'Debug lib libde_rest_plugin.so.dbg is missing ...' && exit 1
