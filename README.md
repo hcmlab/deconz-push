@@ -73,6 +73,11 @@ If the build was successful the script invokes install.sh afterwards.
 
 **6.** For FHEM: Restart FHEM<br>
 Enter "shutdown restart" into the fhem commandbox.
+
+Afterwards, it is recommended to create a device using the myDeconz1 module. Otherwise, the module needs to be reloaded in case of a 'rereadcfg' through the fhem commandbox.
+```bash
+define myDeconz myDeconz1
+```
 <br><br>
 
 **7.** Restart deCONZ<br>

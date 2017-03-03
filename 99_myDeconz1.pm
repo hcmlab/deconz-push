@@ -22,18 +22,29 @@ use POSIX;
 use CGI qw(:standard);
 use Data::Dumper;
 
-my $deCONZ_verbose = 4;
-my $deCONZ_modName = 'RaspBridge';
-my $deCONZ_initialized = 0;
+my $deCONZ_verbose 		= 4;
+my $deCONZ_modName 		= 'RaspBridge';
+my $deCONZ_initialized 	= 0;
 
-my %deCONZ_map_lights = ();
-my %deCONZ_map_sensors = ();
-my %deCONZ_map_groups = ();
-my %deCONZ_map_bridges = ();
+my %deCONZ_map_lights 	= ();
+my %deCONZ_map_sensors 	= ();
+my %deCONZ_map_groups 	= ();
+my %deCONZ_map_bridges 	= ();
 
 sub myDeconz1_Initialize($$)
 {
-	my ($hash) = @_;
+	my ($hash) 			= @_;
+
+	$hash->{DefFn}      = "myDeconz1_Define";
+
+	deCONZ_get_config ( 0 );
+}
+
+sub myDeconz1_Define($$)
+{
+	$deCONZ_initialized		= 0;
+	%deCONZ_map_bridges 	= ();
+
 	deCONZ_get_config ( 0 );
 }
 
@@ -431,7 +442,8 @@ sub pushupd1
 
 		while ( ($cur + 1) < $size )
 		{
-			readingsBulkUpdate ( $dev, $raws[$cur], $raws[$cur + 1] );
+			my $ret = readingsBulkUpdate ( $dev, $raws[$cur], $raws[$cur + 1] );
+			#Log3 $deCONZ_modName, 1, "$funn: $ret";
 
 			Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: $type:$ID " . $raws[$cur] . ' ' . $raws[$cur + 1];
 
