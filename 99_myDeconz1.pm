@@ -25,6 +25,7 @@ use Data::Dumper;
 my $deCONZ_verbose 		= 4;
 my $deCONZ_modName 		= 'RaspBridge';
 my $deCONZ_initialized 	= 0;
+my $deCONZ_initial_ID 	= -1;
 
 my %deCONZ_map_lights 	= ();
 my %deCONZ_map_sensors 	= ();
@@ -203,6 +204,12 @@ sub deCONZ_get_config
 				
 				my $deBridge;
 
+				if ( $deCONZ_initial_ID >= 0 ) {
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Remapping Bridge NR $deCONZ_initial_ID to " . $NR;
+
+					$NR = $deCONZ_initial_ID;
+				}
+
 				if ( defined ( $deCONZ_map_bridges{$NR} ) ) {
 					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating Bridge";
 				}
@@ -211,7 +218,6 @@ sub deCONZ_get_config
 
 					$deCONZ_map_bridges{$NR} = {};
 				}
-				#$deBridge = %deCONZ_map_bridges{$NR};
 				$deBridge = $deCONZ_map_bridges{$NR};
 
 				$deBridge->{hash} = \$bridge;
@@ -404,11 +410,35 @@ sub pushupd1
 
 	if ( !defined ( $deBridge ) ) {
 		Log3 $deCONZ_modName, 1, "$funn: Bridge $NR not found!";
-		if ( !$deCONZ_initialized ) {
+
+		# It can happen, that an HUEBRidge ID may change and does not identify the cached reference		
+		# Check, whether there is only one deBridge and remap the IDentifier as a workaround ...
+		my $ks = keys %deCONZ_map_bridges;
+		if ( scalar $ks == 1 ) {
+			my $newNR;
+			foreach my $i (keys %deCONZ_map_bridges) {
+				$newNR = $i;
+				$deBridge = $deCONZ_map_bridges{$newNR}; last;
+			}
+
+			my $rets = "deCONZ_value:NR:" . $newNR;
+			$rets .= "\n";
+			Log3 $deCONZ_modName, 1, "$funn: Detected new bridge $newNR";
+			$deCONZ_initial_ID = $NR;
+
+			Log3 $deCONZ_modName, 1, "$funn: Assigning new bridge $newNR to $NR";
 			deCONZ_get_config ( '0' );
-			$deCONZ_initialized = 1;
 		}
-		return;
+		else {
+			if ( !$deCONZ_initialized ) {
+				deCONZ_get_config ( '0' );
+				$deCONZ_initialized = 1;
+			}
+			else {
+				$deCONZ_initialized = 0;
+			}
+			return;
+		}
 	}
 
 	my $list;
