@@ -20,7 +20,7 @@ Requirements for FHEM
 -----------------------------------
   1. FHEM installation on RaspBerry Pi<br/>
   2. ZigBee devices are managed by deCONZ and included into FHEM as type HUEDevice<br/>
-  3. The deCONZ application and FHEM run on the same RaspBerry<br/>
+  3. Previous deCONZ versions<br/>
   3.1 deCONZ 2.04.35<br/>
   3.2 deCONZ 2.04.18 (checkout branch 2.04.18)<br/>
   4. Telnet in fhem is enabled. Password authentication and/or SSL/TLS must be enabled if the FHEM-IP is other than localhost.<br/>
