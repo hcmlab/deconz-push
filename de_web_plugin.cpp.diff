@@ -1,17 +1,40 @@
---- ./deconz-rest-plugin/de_web_plugin.cpp	2017-02-18 00:29:09.617999771 +0100
-+++ ./de_web_plugin.cpp	2017-02-17 20:59:07.157149448 +0100
-@@ -504,6 +504,14 @@
+--- ./deconz-rest-plugin/de_web_plugin.cpp	2017-03-04 23:50:14.973712274 +0100
++++ ./de_web_plugin.cpp	2017-02-28 00:11:42.741440294 +0100
+@@ -504,6 +504,16 @@
          return;
      }
  
 +#ifdef ENABLE_PUSH
-+	if ( !sensor->m_pushDevice ) {
++	if ( sensor->needsInitialUpdate ) {
 +		DEBUGFTRACE ( "gpProcessButtonEvent seq:" << ( int ) ind.frameCounter () );
 +
 +		sensor->UpdateSensorFhem ();
++		
++		sensor->needsInitialUpdate = false; sensor->m_pushDType = 's';
 +	}
 +#endif		
 +
      QString lastUpdatedOld = sensor->state().lastupdated();
  
      sensor->state().setButtonevent(ind.gpdCommandId());
+@@ -7037,6 +7047,11 @@
+     }
+ }
+ 
++#ifdef ENABLE_PUSH
++DeRestPluginPrivate * exportedRestPlugin = 0;
++#endif
++
++
+ /*! Main plugin constructor.
+     \param parent - parent object
+  */
+@@ -7044,6 +7059,8 @@
+     QObject(parent)
+ {
+     d = new DeRestPluginPrivate(this);
++    exportedRestPlugin = d;
++    
+     d->q_ptr = this;
+     m_state = StateOff;
+     m_w = 0;

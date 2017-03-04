@@ -1,4 +1,4 @@
---- ./deconz-rest-plugin/rest_node_base.h	2017-02-18 00:29:09.617999771 +0100
+--- ./deconz-rest-plugin/rest_node_base.h	2017-03-04 23:50:14.983712234 +0100
 +++ ./rest_node_base.h	2017-02-17 20:59:07.157149448 +0100
 @@ -13,6 +13,7 @@
  

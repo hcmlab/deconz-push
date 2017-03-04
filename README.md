@@ -23,8 +23,7 @@ Requirements for FHEM
   3. The deCONZ application and FHEM run on the same RaspBerry<br/>
   3.1 deCONZ 2.04.35<br/>
   3.2 deCONZ 2.04.18 (checkout branch 2.04.18)<br/>
-  4. Telnet in fhem is enabled<br/>
-  4.1 Authentication/SSL on telnet is NOT supported yet<br/>
+  4. Telnet in fhem is enabled. Password authentication and/or SSL/TLS must be enabled if the FHEM-IP is other than localhost.<br/>
 <br>
 
 Requirements without FHEM
@@ -74,6 +73,11 @@ If the build was successful the script invokes install.sh afterwards.
 
 **6.** For FHEM: Restart FHEM<br>
 Enter "shutdown restart" into the fhem commandbox.
+
+Afterwards, it is recommended to create a device using the myDeconz1 module. Otherwise, the module needs to be reloaded in case of a 'rereadcfg' through the fhem commandbox.
+```bash
+define myDeconz myDeconz1
+```
 <br><br>
 
 **7.** Restart deCONZ<br>
@@ -88,39 +92,15 @@ Any changes of a rest node result in change of the related readings in the HUEDe
 
 Push using socket listener
 -----------------------------------
-Client listeners have to connect to the IP of the deCONZ plugin and configured port (default: 7073).
-Before a push message can be signaled, a client has to send a '1' to indicate its ready state (for each push message).
-If a client sends a '0', then the connection will be terminated.
-Any changes of a rest node result in a message that lists the rest node ids. For example:
+Client listeners can connect to the IP of the deCONZ plugin and configured port (default: 7073) to receive push messages. By sending a 'quit' message, the connection terminates.
+Any changes of a rest node result in a message that follows the following form:
+Values are seperated by a ^ character. The first value specifies the current session, the second value indicates whether a light (l), sensor (s), or a group (g) has changed, the third value specifies the id of the device, the fourth value names the reading that has changed, and the last value represents the actual value. Afterwards, more readings and values may follow that are related to the given device.
 
 ```bash
-l: 1,2,3
-s: 1
-g: 1
+68^l^4^level^254
+68^l^4^level^254^xy^0,382037,0,000000
 ```
-In this example, the light nodes 1, 2, and 3 have changed; the sensor node 1 has changed; the group node 1 has changed.
-<br>
-An example communication trace could look like:<br/>
-Client:
-```bash
-1
-```
-wait... push message:
-```bash
-l: 1
-```
-Client:
-```bash
-1
-```
-wait... push message:
-```bash
-l: 2
-```
-Client:
-```bash
-0
-```
+In this example, the light node 4 has changed; The level has changed to 254 and the xy reading has changed to 0,382037,0,000000.
 <br>
 
 Remove the plugin
@@ -140,9 +120,9 @@ By means of the following readings (if available), the extension can be explicit
 setreading deCONZBridge push 1
 ```
 
-- Enable the push listener socket.
+- Disable the push listener socket. This is only required, if you are using external push processes. Currently no one is known, so it is safe to disable this option.
 ```bash
-setreading deCONZBridge pushSocket 0
+setreading deCONZBridge pushSocketListener 0
 ```
 
 - Enable the fhem tunnel.
@@ -155,36 +135,59 @@ setreading deCONZBridge fhemtunnel 1
 setreading deCONZBridge fhemPort 7072
 ```
 
+- FHEM telnet enable ssl (mandatory for an IP other than localhost)
+```bash
+setreading deCONZBridge ssl 1
+```
+
+- FHEM telnet password (mandatory for an IP other than localhost)
+```bash
+setreading deCONZBridge fpass password
+```
+
 - Push (listener) port for client conects.
 ```bash
 setreading deCONZBridge pushPort 7073
 ```
 <br>
+After changing one of theses readings, deCONZ needs to be restarted for the readings to become effective. 
+<br><br>
 
 
 Configuration without FHEM
 -----------------------------------
 The extension can also be configured by means of a configuration file located at
 ```bash
-/usr/share/deCONZ/rest_push.txt
+/usr/share/deCONZ/rest_push.conf
 ```
 
 The following options are available:
 ```bash
+# Disable plugin
+#disableplugin
+
 # FHEM telnet port
-2 fport 7072
+fport 7072
+
+# FHEM telnet IP address
+fip 127.0.0.1
+
+# FHEM telnet enable ssl (mandatory for an IP other than localhost)
+#ssl
+
+# FHEM telnet password (mandatory for an IP other than localhost)
+#fpass password
 
 # Push client socket port
-2 pport 7073
-
-# Disable plugin
-#0 disable
+pport 7073
 
 # Disable fhem tunnel
-#0 disablefhem
+#disablefhem
 
 # Disable push listener socket
-#0 disablepush
+#disablepushlistener
+		
+nonodeupdate
 ```
-All the options above relate to the meaning given in the previous section. If an option is not given in the configuration file, then the options translates to enabled (true).
+All the options above relate to the meaning given in the previous section. If an option is not given in the configuration file, then the option translates to the default (or enabled (true)).
 

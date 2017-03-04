@@ -1,5 +1,14 @@
---- ./deconz-rest-plugin/de_web.pro	2017-02-18 00:29:09.617999771 +0100
-+++ ./de_web.pro	2017-02-17 20:59:07.147149498 +0100
+--- ./deconz-rest-plugin/de_web.pro	2017-03-04 23:50:14.933712433 +0100
++++ ./de_web.pro	2017-02-27 22:34:59.256388661 +0100
+@@ -33,7 +33,7 @@
+ }
+ 
+ win32:LIBS +=  -L../.. -ldeCONZ1
+-unix:LIBS +=  -L../.. -ldeCONZ
++unix:LIBS +=  -L../.. -ldeCONZ -lcrypto -lssl
+ win32:CONFIG += dll
+ 
+ unix:!macx {
 @@ -91,6 +91,7 @@
             rest_node_base.h \
             rule.h \

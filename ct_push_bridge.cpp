@@ -14,25 +14,34 @@
 */
 
 #include <QtPlugin>
-#include <QTimer>
 #include "ct_push_bridge.h"
-#include "rest_node_base.h"
-#include "light_node.h"
-#include "sensor.h"
-#include <deconz.h>
+#include "de_web_plugin_private.h"
+#include "colorspace.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <vector>
 #include <fstream>
 #include <sstream>
-#include <iostream>       // std::cerr
+#include <iostream>
 #include <exception>
 #include <time.h>
 #include <sys/stat.h>
+
+#define USE_SSL
+
+#ifdef USE_SSL
+    #include <openssl/ssl.h>
+    #include <openssl/err.h>
+#	if (SSLEAY_VERSION_NUMBER >= 0x0907000L)
+#		include <openssl/conf.h>
+#	endif
+#endif
 
 #ifdef DEBUG
 #include <execinfo.h>
@@ -45,9 +54,6 @@ using namespace std;
 #ifdef ENABLE_PUSH
 
 //#define DEBUGV3
-#define ENABLE_BULK_UPDATE
-//#define ENABLE_BULK_UPDATE1
-
 
 /*
 #ifdef DEBUGV2
@@ -78,17 +84,12 @@ using namespace std;
 PushBridge pushBridge;
 PushDevice raspBee;
 
+extern DeRestPluginPrivate * exportedRestPlugin;
+
 const char * UNKNOWN_DEVICE_NAME = "Unknown";
 
-bool    PushBridge::enable_plugin       = true;
-bool    PushBridge::enable_push         = true;
-bool    PushBridge::enable_fhem_tunnel  = true;
-bool    PushBridge::fhem_node_update    = true;
-int     PushBridge::fhem_port           = 7072;
-int     PushBridge::push_port           = 7073;
-
-const char *    configFile      = "/usr/share/deCONZ/rest_push.txt";
-time_t          configFileTS    = 0;
+const char *    configFile      = "/usr/share/deCONZ/rest_push.conf";
+const char *    bridgeConfFile  = "/usr/share/deCONZ/rest_bridge.conf";
 
 #ifdef DEBUG
 void sigseghandler ( int sig )
@@ -104,147 +105,208 @@ void sigseghandler ( int sig )
 }
 #endif
 
-void PushBridge::RequestConfigFile ()
+
+void PushBridge::RequestConfig ()
 {
-    DEBUGFTRACE ( "RequestConfigFile" );
-
-    uint64_t t = time ( 0 );
-    uint64_t diff = t - lastConfigRequest;
-    if ( diff < 60 )
-        return;
+    DEBUGFTRACE ( "RequestConfig" );
     
-    if ( diff < 180 ) {
-        configRequested++;
-    }
-
-    if ( configRequested >= 20 ) {
-        if ( diff > 3600 )
-            configRequested = 0;
-        else return;
-    }
-
-    lastConfigRequest = t;
+    char cmd [ 128 ];
+    snprintf ( cmd, 128, "{deCONZ_get_config('%llu')}\n", raspBee.mac );
     
-    EnqueueToFhem ( "{deCONZ_build_config()}\n" );
+    EnqueueToFhem ( cmd );
 }
 
 
-void PushBridge::CheckConfigFile ()
+void PushBridge::SaveCache ()
 {
-    DEBUGFTRACE ( "CheckConfigFile" );
+    DEBUGFTRACE ( "SaveCache" );
 
-    struct stat attr;
-    if ( stat ( configFile, &attr ) ) {
-        return; // File does not exist
+    ofstream bridgeFile ( bridgeConfFile );
+
+    if ( bridgeFile.good () )
+    {
+        DEBUGFTRACE ( "SaveCache: Saving bridge id " << fbridge_id );
+
+        bridgeFile << fbridge_id << endl;
+
+        DEBUGFTRACE ( "SaveCache: Saving raspBee.mac " << raspBee.mac );
+
+        bridgeFile << raspBee.mac << endl;
+
+        bridgeFile.close ();
     }
-    else {
-        if ( configFileTS == attr.st_mtime ) {
-            return; // File has not changed
-        }
+}
 
-        configFileTS = attr.st_mtime;
+
+void PushBridge::LoadConfigFile ()
+{
+    DEBUGFTRACE ( "LoadConfigFile" );
+
+    bool restartFhemThread  = false;
+    bool restartPushThread  = false;
+    bool _enable_fhem_tunnel = true;
+    bool _enable_push       = true;
+    bool _enable_ssl       = false;
+
+    ifstream bridgeFile ( bridgeConfFile );
+
+    if ( bridgeFile.good () )
+    {
+        DEBUGFTRACE ( "LoadConfigFile: Loading bridge conf ..." );
+
+        string line;
+        if ( getline ( bridgeFile, line ) )
+        {
+            int value;                    
+            std::istringstream iss ( line );
+
+            if ( iss >> value ) {
+                if ( value > 0 ) {
+                    fbridge_id = value;
+                    DEBUGFTRACE ( "LoadConfigFile: Using bridge ID number " << value );
+                }
+            }
+
+            if ( getline ( bridgeFile, line ) )
+            {                        
+                std::istringstream iss ( line );
+
+                if ( iss >> value ) {
+                    if ( value > 0 && raspBee.mac <= 0 ) {
+                        raspBee.mac = value;
+                        DEBUGFTRACE ( "LoadConfigFile: Using raspBee.mac " << value );
+                    }
+                }
+            }
+        }
+        bridgeFile.close ();
     }
 
     ifstream mapFile ( configFile );
 
     if ( mapFile.good () )
     {
-        DEBUGV ( "CheckConfigFile: Loading ..." );
+        DEBUGFTRACE ( "LoadConfigFile: Loading configuration ..." );
 
-        if ( !pthread_mutex_lock ( &devicesLock ) )
-        {
-            if ( !pthread_mutex_lock ( &groupLock ) )
-            {
-                string line;
-                while ( getline ( mapFile, line ) )
-                {
-                    std::istringstream iss ( line );
-                    
-                    const char * chars = line.c_str ();
-                    if ( line.size () > 0 && chars [ 0 ] == '#' )
-                        continue;
+        string line;
+        while ( getline ( mapFile, line ) )
+        {            
+            const char * chars = line.c_str ();
+            if ( line.size () < 3 || chars [ 0 ] == '#' )
+                continue;
 
-                    if ( chars [ 0 ] == '0' && chars [ 1 ] == ' ' ) {
-                        // We have a configuration option
-                        int idname; string cfg;
-
-                        if ( iss >> idname >> cfg ) {
-                            // Disable push extension
-                            if ( !cfg.compare ( "disable" ) ) {
-                                enable_plugin = false;
-                                DEBUGV1 ( "CheckConfigFile: Disabled push extension." );
-                                break;
-                            }
-                            else if ( !cfg.compare ( "nonodeupdate" ) ) {
-                                fhem_node_update = false;
-                                DEBUGV1 ( "CheckConfigFile: Disabled fhem node update." );
-                            }
-                            else if ( !cfg.compare ( "disablefhem" ) ) {
-                                enable_fhem_tunnel = false;
-                                DEBUGV1 ( "CheckConfigFile: Disabled fhem tunnel." );
-                            }
-                            else if ( !cfg.compare ( "disablepush" ) ) {
-                                enable_push = false;
-                                DEBUGV1 ( "CheckConfigFile: Disabled push socket." );
-                            }
-                        }
-                    }
-
-                    else if ( chars [ 0 ] == '2' && chars [ 1 ] == ' ' ) {
-                        // We have a group
-                        int idname; string optname; int value;
-
-                        if ( iss >> idname >> optname >> value ) {
-                            if ( !optname.compare ( "fport" ) ) {
-                                if ( value > 0 && value < 66000 ) {
-                                    fhem_port = value;
-                                    DEBUGV1 ( "CheckConfigFile: Using fhem port " << value );
-                                }
-                            }
-                            else if ( !optname.compare ( "pport" ) ) {
-                                if ( value > 0 && value < 66000 ) {
-                                    push_port = value;
-                                    DEBUGV1 ( "CheckConfigFile: Using push port " << value );
-                                }
-                            }
-                        }
-                    }
-
-                    else if ( chars [ 0 ] == '1' && chars [ 1 ] == ' ' ) {
-                        // We have a group
-                        int idname; string fhemname; string dename;
-
-                        if ( iss >> idname >> fhemname >> dename ) {
-                            // Add to groups
-                            AddPushGroup ( dename.c_str (), fhemname.c_str () );
-                        }
-                    }
-
-                    else {
-                        uint64_t mac; string name;
-
-                        if ( iss >> mac >> name ) {
-                            //if ( ourmac == mac ) {
-                            //	raspBee.name = name;
-                            //}
-                            //else {
-                                AddPushDevice ( mac, name.c_str () );
-                            //}
-                        }
-                    }
-                }
-
-                if ( pthread_mutex_unlock ( &groupLock ) ) {
-                    DEBUGV ( "CheckConfigFile: Failed to unlock groupLock." );
-                }
+            // Disable push extension
+            if ( !line.compare ( "disableplugin" ) ) {
+                enable_plugin = false;
+                DEBUGFTRACE ( "LoadConfigFile: Disabled push extension." );
+                break;
             }
+            else if ( !line.compare ( "nonodeupdate" ) ) {
+                fhem_node_update = false;
+                DEBUGFTRACE ( "LoadConfigFile: Disabled fhem node update." );
+            }
+            else if ( !line.compare ( "disablefhem" ) ) {
+                _enable_fhem_tunnel = false;
+                DEBUGFTRACE ( "LoadConfigFile: Disabled fhem tunnel." );
+            }
+            else if ( !line.compare ( "disablepushlistener" ) ) {
+                _enable_push = false;
+                DEBUGFTRACE ( "LoadConfigFile: Disabled push socket." );
+            }
+            else if ( !line.compare ( "ssl" ) ) {
+                _enable_ssl = true;
+                DEBUGFTRACE ( "LoadConfigFile: Enabling ssl." );
+            }
+            else {
+                const char * ptr = line.c_str ();
+                if ( ptr [ 0 ] == 'f' && ptr [ 1 ] == 'i' && ptr [ 2 ] == 'p' && ptr [ 3 ] == ' ' ) {
+                    string optname; string value;
+                    
+                    std::istringstream iss ( line );
 
-            if ( pthread_mutex_unlock ( &devicesLock ) ) {
-                DEBUGV ( "CheckConfigFile: Failed to unlock devicesLock." );
+                    if ( iss >> optname >> value ) {
+                        struct sockaddr_in addr;
+
+                        if ( inet_aton ( value.c_str (), &addr.sin_addr ) ) {
+                            if ( fhem_ip_addr.compare ( value ) ) {
+                                fhem_ip_addr = value;
+                                restartFhemThread = true;
+                                DEBUGFTRACE ( "LoadConfigFile: Using fhem ip " << value );
+                            }
+                        }
+                    }
+                }
+                else if ( ptr [ 0 ] == 'f' && ptr [ 1 ] == 'p' && ptr [ 2 ] == 'a' && ptr [ 3 ] == 's' && ptr [ 4 ] == 's' && ptr [ 5 ] == ' ' ) {
+                    string optname; string value;
+                    
+                    std::istringstream iss ( line );
+
+                    if ( iss >> optname >> value ) {
+                        if ( fhemPassword.compare ( value ) ) {
+                            fhemPassword = value;
+                            restartFhemThread = true;
+                            //DEBUGFTRACE ( "LoadConfigFile: Using fhem password " << value );
+                            DEBUGFTRACE ( "LoadConfigFile: Using fhem password " );
+                        }
+                    }
+                }
+                else {
+                    string optname; int value;
+                    
+                    std::istringstream iss ( line );
+
+                    if ( iss >> optname >> value ) {
+                        if ( !optname.compare ( "fport" ) ) {
+                            if ( value > 0 && value < 66000 ) {
+                                if ( fhem_port != value ) {
+                                    fhem_port = value; restartFhemThread = true;
+                                    DEBUGFTRACE ( "LoadConfigFile: Using fhem port " << value );
+                                }
+                            }
+                        }
+                        else if ( !optname.compare ( "pport" ) ) {
+                            if ( value > 0 && value < 66000 ) {
+                                if ( bridge_push_port != value ) {
+                                    bridge_push_port = value; restartPushThread = true;
+                                    DEBUGFTRACE ( "LoadConfigFile: Using push port " << value );
+                                }
+                            }
+                        }
+                        else {
+                            DEBUGFTRACE ( "LoadConfigFile: Unknown config line " << line );
+                        }
+                    }
+                }
             }
         }
+
         mapFile.close ();
-    }   
+    }
+
+    if ( !enable_plugin ) {
+        DEBUGFTRACE ( "LoadConfigFile: Disabling plugin. " );
+        enable_fhem_tunnel = enable_push = false;
+    }
+    else {
+        if ( fhemSSL != _enable_ssl ) {
+            fhemSSL = _enable_ssl;
+            restartFhemThread = true;
+            DEBUGFTRACE ( "LoadConfigFile: Restarting fhem thread due to ssl option." );
+        }
+
+        if ( _enable_fhem_tunnel != enable_fhem_tunnel ) {
+            enable_fhem_tunnel = _enable_fhem_tunnel; restartFhemThread = true;
+            DEBUGFTRACE ( "LoadConfigFile: Restarting fhem thread. " );
+        }
+
+        if ( _enable_push != enable_push ) {
+            enable_push = _enable_push; restartPushThread = true;
+            DEBUGFTRACE ( "LoadConfigFile: Restarting push thread. " );
+        }
+    }
+
+    if ( restartFhemThread ) HandleFhemThread ();
+    if ( restartPushThread ) HandlePushThread ();
 }
 
 
@@ -252,7 +314,13 @@ void PushBridge::CheckConfigFile ()
 // PushBridge Constructor
 ////////////////////////////////////////////////////////////////////////////////
 
-PushBridge::PushBridge ()
+PushBridge::PushBridge () : 
+    fhemSocket ( -1 ), fhemThreadRun ( false ), fhemListenerRun ( false ), acceptSocket ( -1 ), acceptThreadRun ( false ), 
+    pushSocket ( -1 ), pushThreadRun ( false ), apsInst ( 0 ),
+    enable_plugin ( true ), enable_fhem_tunnel ( false ), enable_push ( false ),
+    fhemActive ( false ), fhemListenerActive ( false ), acceptActive ( false ), pushActive ( false ), 
+    fhemSSL ( false ), fhemSSLInitialized ( false ), conectTime ( 0 ), fhemAuthOK ( true ), ssl_ctx ( 0 ), ssl_web ( 0 ), ssl_ptr ( 0 ),
+    fhem_node_update ( false ), fhem_ip_addr ( "127.0.0.1" ), fhem_port ( 7072 ), bridge_push_port ( 7073 ), fbridge_id ( -1 )
 {
     DEBUGL ( signal ( SIGSEGV, sigseghandler ); )
 
@@ -270,27 +338,14 @@ PushBridge::PushBridge ()
     devices.clear ();
     groups.clear ();
 
-    pushLights.clear ();
-    pushSensors.clear ();
-    pushGroups.clear ();
-
-#ifdef ENABLE_REACHABLE_TIMER
-	devicesTimer.clear ();
-	timerCurrent		= time ( 0 );
-#endif
+    fhemPassword = "";
 
     raspBee.available   = true;
-    raspBee.type        = PUSH_TYPE_CONTROLLER;
-
-    fhemActive          = false;
-    acceptActive        = false;
-    pushActive          = false;
 
     // Init threads
-    fhemSocket          = -1;
-    pushSocket          = -1;
-
     memset ( &fhemThread, 0, sizeof (fhemThread) );
+    memset ( &fhemListener, 0, sizeof (fhemListener) );
+    
     memset ( &acceptThread, 0, sizeof (acceptThread) );
     memset ( &pushThread, 0, sizeof (pushThread) );
 
@@ -303,27 +358,13 @@ PushBridge::PushBridge ()
     pthread_cond_init ( &fhemSignal,        NULL );
 
     pthread_mutex_init ( &pushLock,	        0 );
-    pthread_cond_init ( &pushSignal,        NULL );
-
-#ifdef ENABLE_REACHABLE_TIMER
-    alive_timer = 0;
-#endif
-    
-	// Update our own node
-	//uint64_t ourmac	= apsInst->getParameter ( ParamMacAddress );
-	//raspBee.mac		= ourmac;
-
-    //DEBUGV1 ( "PushBridge::Construct: Our mac:" << ourmac );
+    pthread_cond_init ( &pushSignal,        NULL );    
 
     DEBUGV1 ( "PushBridge::Construct: Loading configuration." );
 
-    configRequested = 0;
-    lastConfigRequest = 0;
-    CheckConfigFile ();
+    LoadConfigFile ();
 
-    if ( !enable_plugin ) {
-        return;
-    }
+    if ( !enable_plugin ) { return; }
 
     //connect ( apsInst, SIGNAL ( apsdeDataConfirm ( const deCONZ::ApsDataConfirm & ) ),
     //        this, SLOT ( apsdeDataConfirm ( const deCONZ::ApsDataConfirm & ) ) );
@@ -333,11 +374,94 @@ PushBridge::PushBridge ()
 
     connect ( apsInst, SIGNAL ( nodeEvent ( deCONZ::NodeEvent ) ),
             this, SLOT ( nodeEvent ( deCONZ::NodeEvent ) ) );
+}
+
+
+void PushBridge::HandleFhemThread ()
+{
+    DEBUGFTRACE ( "HandleFhemThread" );
+
+    if ( fhemThreadRun ) {
+        fhemThreadRun = false;
+        fhemListenerRun = false;
+
+        if ( fhemSocket != -1 ) {
+            ::shutdown ( fhemSocket, 2 );
+            ::close ( fhemSocket );
+            fhemSocket = -1;
+        }
+
+        SignalFhemThread ();
+
+        DEBUGFTRACE ( "HandleFhemThread: Waiting for them thread." );
+        // Wait for thread exit
+        pthread_join ( fhemThread, 0 );
+
+        // Wait for listener thread exit
+        //pthread_join ( fhemListener, 0 ); // Dont do this.. as the listener may call this - deadlock
+
+        memset ( &fhemThread, 0, sizeof (fhemThread) );
+        memset ( &fhemListener, 0, sizeof (fhemListener) );
+    }
+    
+    EmptyFhemQueue ();
+
+    if ( enable_fhem_tunnel ) {
+        fhemThreadRun = true;
+        
+        if ( fhemPassword.size () <= 0 ) {
+            fhemAuthOK = true;
+        }
+        else {
+            fhemAuthOK = false;
+        }
+
+        DEBUGFTRACE ( "HandleFhemThread: Starting thread." );
+
+        pthread_create ( &fhemThread, 0, FhemThreadStarter, this );
+    }
+
+    DEBUGFTRACE ( "HandleFhemThread: done" );
+}
+
+
+void PushBridge::HandlePushThread ()
+{
+    DEBUGFTRACE ( "HandlePushThread" );
+
+    if ( pushThreadRun || acceptThreadRun ) {
+        pushThreadRun = false;
+        acceptThreadRun = false;
+
+        if ( acceptSocket != -1 ) {
+            ::shutdown ( acceptSocket, 2 );
+            ::close ( acceptSocket );
+            acceptSocket = -1;
+        }
+
+        if ( pushSocket != -1 ) {
+            ::shutdown ( pushSocket, 2 );
+            ::close ( pushSocket );
+            pushSocket = -1;
+        }
+
+        SignalPushThread ();
+
+        // Wait for thread exit
+        //pthread_join ( pushThread, 0 );
+
+        // Wait for listener thread exit
+        DEBUGFTRACE ( "HandlePushThread: Waiting for acceptThread." );
+        pthread_join ( acceptThread, 0 );
+    
+        memset ( &acceptThread, 0, sizeof (acceptThread) );
+        memset ( &pushThread, 0, sizeof (pushThread) );
+    }
 
     if ( enable_push ) {
         acceptThreadRun = true;
 
-        DEBUGV1 ( "PushBridge::Construct: Starting accept thread." );
+        DEBUGFTRACE ( "HandlePushThread: Starting accept thread." );
 
         pthread_create ( &acceptThread, 0, AcceptThreadStarter, this );
 
@@ -348,31 +472,26 @@ PushBridge::PushBridge ()
         //pthread_create ( &pushThread, 0, PushThreadStarter, this );
     }
 
-    if ( enable_fhem_tunnel ) {
-        fhemThreadRun = true;
-
-        DEBUGV1 ( "PushBridge::Construct: Starting thread." );
-
-        pthread_create ( &fhemThread, 0, FhemThreadStarter, this );
-    }
-
-#ifdef ENABLE_REACHABLE_TIMER
-    // Timer to check the alive status of nodes
-    alive_timer = new QTimer ( this );
-    alive_timer->setSingleShot ( false );
-
-    connect ( alive_timer, SIGNAL ( timeout () ), this, SLOT ( TimerAlive () ) );
-
-    DEBUGV1 ( "PushBridge::Construct: Starting reachable check timer." );
-
-    alive_timer->start ( 10000 );
-#endif
+    DEBUGFTRACE ( "HandlePushThread: done" );
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // PushBridge deconstructor
 ////////////////////////////////////////////////////////////////////////////////
+
+#ifdef USE_SSL
+
+void DisposeSSL ( void * &ssl_ctx, void * &ssl_web )
+{
+    SSL_CTX     *   ctx = ( SSL_CTX * ) ssl_ctx;
+    BIO         *   web = ( BIO * ) ssl_web;
+
+	if ( web != NULL ) { BIO_free_all ( web ); ssl_web = 0; }
+
+	if ( NULL != ctx ) { SSL_CTX_free ( ctx ); ssl_ctx = 0; }
+}
+
+#endif
 
 PushBridge::~PushBridge()
 {
@@ -391,12 +510,8 @@ PushBridge::~PushBridge()
     }
 
     devices.clear ();
-
-#ifdef ENABLE_REACHABLE_TIMER
-	devicesTimer.clear ();
-#endif
     
-    std::map < std::string, PushGroup * >::iterator itg = groups.begin ();
+    std::map < int, PushGroup * >::iterator itg = groups.begin ();
     
     while ( itg != groups.end () ) {
         PushGroup * group = itg->second;
@@ -407,34 +522,31 @@ PushBridge::~PushBridge()
     groups.clear ();
 
     fhemThreadRun = false;
-
-    SignalFhemThread ();
-
-    // Wait for thread exit
-    pthread_join ( fhemThread, 0 );
-    
-    EmptyFhemQueue ();
-
-    pthread_cond_destroy ( &fhemSignal );
-
-    pthread_mutex_destroy ( &fhemQueueLock );
-    pthread_mutex_destroy ( &groupLock );
-	pthread_mutex_destroy ( &devicesLock );
+    fhemListenerRun = false;
 
     if ( fhemSocket != -1 ) {
+        ::shutdown ( fhemSocket, 2 );
         ::close ( fhemSocket );
         fhemSocket = -1;
     }
+
+#ifdef USE_SSL
+    DisposeSSL ( ssl_ctx, ssl_web );
+#endif
+
+    SignalFhemThread ();
 
     pushThreadRun = false;
     acceptThreadRun = false;
 
     if ( acceptSocket != -1 ) {
+        ::shutdown ( acceptSocket, 2 );
         ::close ( acceptSocket );
         acceptSocket = -1;
     }
 
     if ( pushSocket != -1 ) {
+        ::shutdown ( pushSocket, 2 );
         ::close ( pushSocket );
         pushSocket = -1;
     }
@@ -442,14 +554,29 @@ PushBridge::~PushBridge()
     SignalPushThread ();
 
     // Wait for thread exit
+    pthread_join ( fhemThread, 0 );
+
+    // Wait for listener thread exit
+    pthread_join ( fhemListener, 0 );
+
+    // Wait for thread exit
     //pthread_join ( pushThread, 0 );
 
     pthread_join ( acceptThread, 0 );
+    
+    EmptyFhemQueue ();
+
+    EmptyPushQueue ();
+
+    pthread_cond_destroy ( &fhemSignal );
+
+    pthread_mutex_destroy ( &fhemQueueLock );
+    pthread_mutex_destroy ( &groupLock );
+	pthread_mutex_destroy ( &devicesLock );
 
     pthread_cond_destroy ( &pushSignal );
 
     pthread_mutex_destroy ( &pushLock );
-    
 }
 
 
@@ -457,466 +584,327 @@ PushBridge::~PushBridge()
 // FHEM channel injection
 ////////////////////////////////////////////////////////////////////////////////
 
-PushDevice * PushBridge::GetNodeDevice ( void * voidNode, int type )
-{
-    DEBUGFTRACE ( "GetNodeDevice" );
-
-    PushDevice * device = 0;
-
-    switch ( type )
-    {
-        case 0: device = ( ( RestNodeBase * ) voidNode )->m_pushDevice; break;
-        case 1: return ( ( SensorState * ) voidNode )->m_pushDevice;
-        case 2: return ( ( SensorConfig * ) voidNode )->m_pushDevice;
-        default: return 0;
-    }
-    if ( !device )
-        return 0;
-    DEBUGFTRACE ( "GetNodeDevice 1" );
-
-    //DEBUGFTRACE ( "GetNodeDevice 1:" << device->type );
-    //DEBUGFTRACE ( "GetNodeDevice 1:" << device->name.c_str () );
-
-	if ( device->needsRestUpdate ) 
-    {
-        device->type = ( ( RestNodeBase * ) voidNode )->m_pushType;
-
-        DEBUGFTRACE ( "GetNodeDevice 2" );
-
-        ( ( RestNodeBase * ) voidNode )->UpdateToFhem ( device );
-	}
-
-    DEBUGFTRACE ( "GetNodeDevice 3" );
-    return device;
-}
-
-
-void PushBridge::SetNode ( void * derestNode, void * denode )
+void PushBridge::SetNode ( Node * node )
 {
     DEBUGFTRACE ( "SetNode" );
 
-    if ( !denode || !derestNode || !PushBridge::enable_plugin || !PushBridge::fhemActive )
+    if ( !node || !fhemActive )
         return;
-
-    Node * node = ( Node * ) denode;
 	
     uint64_t addr 	= node->address ().ext ();
 
     PushDevice * device = pushBridge.GetPushDevice ( addr );
     if ( device ) {
-        RestNodeBase * restnode = ( RestNodeBase * ) derestNode;
-
         device->node = node;
-        device->type = restnode->m_pushType;    		
-        restnode->m_pushDevice = device;
     }
 }
 
 
-void PushBridge::UpdatePushNode ( void * restNode, int type )
-{
-    DEBUGFTRACE ( "UpdatePushNode" );
-
-    int id = -1;
-    int pushType = PUSH_TYPE_UNKNOWN;
-
-    if ( type == 0 )
-    {
-        RestNodeBase * node = ( RestNodeBase * ) restNode;
-
-        id = node->id ().toInt ();
-
-        pushType = node->m_pushType;
-    }
-    else if ( type == 1 )
-    {
-        SensorState * node = ( SensorState * ) restNode;
-
-        id = node->m_pushId;
-
-        pushType = PUSH_TYPE_SWITCH;
-    }
-    else if ( type == 2 )
-    {
-        SensorConfig * node = ( SensorConfig * ) restNode;
-
-        id = node->m_pushId;
-
-        pushType = PUSH_TYPE_SWITCH;
-    }
-
-    if ( id >= 0 && !pthread_mutex_lock ( &pushLock ) )
-    {
-        if ( pushType == PUSH_TYPE_SWITCH ) {
-            pushSensors [ id ] = id;      
-        }
-        else {  
-            pushLights [ id ] = id;
-        }
-
-        if ( pthread_cond_broadcast ( &pushSignal ) ) {
-            DEBUGV ( "UpdatePushNode: Failed to signal." );
-        }
-
-        if ( pthread_mutex_unlock ( &pushLock ) ) {
-            DEBUGV ( "UpdatePushNode: Failed to unlock." );
-        }
-    }
-}
-
-
-void PushBridge::UpdatePushGroup ( QString & m_id )
-{
-    DEBUGFTRACE ( "UpdatePushGroup" );
-
-    int id = m_id.toInt ();
-
-    if ( !pthread_mutex_lock ( &pushLock ) )
-    {
-        pushGroups [ id ] = id;
-
-        if ( pthread_cond_broadcast ( &pushSignal ) ) {
-	        DEBUGV ( "UpdatePushGroup: Failed to signal." );
-        }
-
-        if ( pthread_mutex_unlock ( &pushLock ) ) {
-	        DEBUGV ( "UpdatePushGroup: Failed to unlock." );
-        }
-    }
-}
-
-
-void PushBridge::SetNodeAvailable ( void * restNode, bool available )
+void PushBridge::SetNodeAvailable ( char type, int id, bool available )
 {
     DEBUGFTRACE ( "SetNodeAvailable" );
-    if ( !restNode )
-        return;
 
-    if ( acceptActive ) {
-        UpdatePushNode ( restNode, 0 );
-    }
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( !PushBridge::fhemActive ) {
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeAvailable: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
         return;
     }
 
-    PushDevice * device = GetNodeDevice ( restNode, 0 );
-    if ( !device )
-        return;
-        
-    if ( __sync_val_compare_and_swap ( & device->available, !available, available ) == !available ) 
-    {
-        int reachable = ( int ) available;
+    int reachable = ( int ) available;
 
-        DEBUGV2 ( "SetNodeAvailable: Reachable " << reachable << " to mac " << device->mac );
+    DEBUGV2 ( "SetNodeAvailable: Reachable " << reachable << " to device " << type << id );
 
-        char cmd [ 256 ];
-        const char * name = device->name.c_str ();
+    char buffer [ 256 ];
 
-        DEBUGV ( "SetNodeAvailable: Reachable " << reachable << " to device:" << name );
-        DEBUGV1 ( "SetNodeAvailable: Reachable " << reachable << " to device:" << name );
+    DEBUGV ( "SetNodeAvailable: Reachable " << reachable << " to device: " << type << id );
+    DEBUGV1 ( "SetNodeAvailable: Reachable " << reachable << " to device: " << type << id );
 
-#ifdef ENABLE_BULK_UPDATE
-		snprintf ( cmd, 256, "{pushupd('%s^reachable^%i^available^%i')}\n"
-        , name, reachable, reachable );
-#else
-        snprintf ( cmd, 256, "setreading %s reachable %i\n"
-            "setreading %s available %i\n"
-        , name, reachable, name, reachable );
-#endif
-        EnqueueToFhem ( cmd );
+    int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^reachable^%i^available^%i')}\n",
+        fbridge_id, type, id, reachable, reachable );
+    
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
     }
 }
 
 
-void PushBridge::SetNodeInfo ( void * restNode, int type, const char * reading, const QString & value )
+void PushBridge::SetNodeId ( char type, int id )
+{
+    DEBUGFTRACE ( "SetNodeId 1" );
+
+    if ( !fhemActive && !pushActive ) { return; }
+
+    DEBUGFTRACE ( "SetNodeId 11" );
+
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeId: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
+        return;
+    }
+
+    DEBUGV2 ( "SetNodeId: " << id << " to device " << type << id );
+
+    char buffer [ 256 ];
+	int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^id^%i')}\n", fbridge_id, type, id, id );
+
+    DEBUGFTRACE ( "SetNodeId 15" );
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
+    }
+}
+
+
+void PushBridge::SetNodeUid ( char type, int id, const QString & m_uid )
+{
+    DEBUGFTRACE ( "SetNodeUid 1" );
+
+    if ( !fhemActive && !pushActive ) { return; }
+    
+    DEBUGFTRACE ( "SetNodeUid 11" );
+
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeUid: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
+        return;
+    }
+
+    DEBUGV2 ( "SetNodeUid: " << qPrintable ( m_uid ) << " to device " << type << id );
+
+    char buffer [ 256 ];
+	int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^uniqueid^%s')}\n", fbridge_id, type, id, qPrintable ( m_uid ) );
+
+    DEBUGFTRACE ( "SetNodeUid 15" );
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
+    }
+}
+
+
+void PushBridge::SetNodeInfo ( char type, int id, const char * reading, const QString & value )
 {
     DEBUGFTRACE ( "SetNodeInfo 1:" << reading );
-    if ( !restNode )
-        return;
 
-    if ( acceptActive ) {
-        UpdatePushNode ( restNode, type );
-    }
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( !PushBridge::fhemActive ) {
-        return;
-    }
-
-    PushDevice * device = GetNodeDevice ( restNode, type );
-    if ( !device )
-        return;
     DEBUGFTRACE ( "SetNodeInfo 11" );
-    const char * name = device->name.c_str ();
-    
-    DEBUGFTRACE ( "SetNodeInfo 111" );
-    if ( !name ) {
-        DEBUGFTRACE ( "SetNodeInfo 13: Invalid name!" );
+
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeInfo: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
         return;
     }
-    DEBUGV ( "SetNodeInfo " << GetNodeType ( device->type ) << ": " << name << " " << reading );
+
+    DEBUGV2 ( "SetNodeInfo: " << reading << " " << qPrintable ( value ) << " to device " << type << id );
 
     char buffer [ 256 ];
-#ifdef ENABLE_BULK_UPDATE1
-	snprintf ( buffer, 256, "{pushupd('%s^%s^%s')}\n", name, reading, qPrintable ( value ) );
-#else
-    snprintf ( buffer, 256, "setreading %s %s %s\n", name, reading, qPrintable ( value ) );
-#endif
+	int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^%s^%s')}\n", fbridge_id, type, id, reading, qPrintable ( value ) );
 
     DEBUGFTRACE ( "SetNodeInfo 15" );
-    EnqueueToFhem ( buffer );
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
+    }
 }
 
 
-void PushBridge::SetNodeInfo ( void *, QString & qdevice, const char * reading, uint32_t value )
-{
-    DEBUGFTRACE ( "SetNodeInfo 2" );
-    if ( qdevice.length () <= 0 )
-        return;
-    
-    const char * name = qPrintable ( qdevice );
-    
-    DEBUGV ( "SetNodeInfo: " << name << " " << reading );
-
-    char buffer [ 256 ];
-#ifdef ENABLE_BULK_UPDATE1
-	snprintf ( buffer, 256, "{pushupd('%s^%s^%i')}\n", name, reading, value );
-#else
-    snprintf ( buffer, 256, "setreading %s %s %i\n", name, reading, value );
-#endif
-    EnqueueToFhem ( buffer );
+void PushBridge::SetNodeInfo ( char type, int id, const char * reading, QString & value ) {
+    SetNodeInfo ( type, id, reading, (const QString &) value );
 }
 
 
-void PushBridge::SetNodeInfo ( void * restNode, int type, const char * reading, QString & value ) {
-    SetNodeInfo ( restNode, type, reading, (const QString &) value );
-}
-
-
-void PushBridge::SetNodeInfo ( void * restNode, int type, const char * reading, uint32_t value )
+void PushBridge::SetNodeInfo ( char type, int id, const char * reading, uint32_t value )
 {
     DEBUGFTRACE ( "SetNodeInfo 3: " << reading << " v:" << value );
 
-    if ( !restNode )
-        return;
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( acceptActive ) {
-        UpdatePushNode ( restNode, type );
-    }
-
-    if ( !PushBridge::fhemActive ) {
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeInfo: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
         return;
     }
-
-    PushDevice * device = GetNodeDevice ( restNode, type );
-    if ( !device )
-        return;
-    const char * name = device->name.c_str ();
     
-    DEBUGV ( "SetNodeInfo " << GetNodeType ( device->type ) << ": " << name << " " << reading );
+    DEBUGV2 ( "SetNodeInfo: " << reading << " " << value << " to device " << type << id );
 
     char buffer [ 256 ];
-#ifdef ENABLE_BULK_UPDATE1
-	snprintf ( buffer, 256, "{pushupd('%s^%s^%i')}\n", name, reading, value );
-#else
-    snprintf ( buffer, 256, "setreading %s %s %i\n", name, reading, value );
-#endif
-    EnqueueToFhem ( buffer );
+	int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^%s^%i')}\n", fbridge_id, type, id, reading, value );
+    
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
+    }
 }
 
 
-void PushBridge::SetNodeInfoDouble ( void * restNode, int type, const char * reading, double value )
+void PushBridge::SetNodeInfoDouble ( char type, int id, const char * reading, double value )
 {
     DEBUGFTRACE ( "SetNodeInfoDouble" );
-    if ( !restNode )
-        return;
 
-    if ( acceptActive ) {
-        UpdatePushNode ( restNode, type );
-    }
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( !PushBridge::fhemActive ) {
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeInfoDouble: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
         return;
     }
-
-    PushDevice * device = GetNodeDevice ( restNode, type );
-    if ( !device )
-        return;
-    const char * name = device->name.c_str ();
     
-    DEBUGFTRACE ( "SetNodeInfoDouble " << GetNodeType ( device->type ) << ": " << name << " " << reading );
+    DEBUGV2 ( "SetNodeInfoDouble: " << reading << " " << value << " to device " << type << id );
 
     char buffer [ 256 ];
-#ifdef ENABLE_BULK_UPDATE1
-	snprintf ( buffer, 256, "{pushupd('%s^%s^%f')}\n", name, reading, value );
-#else
-    snprintf ( buffer, 256, "setreading %s %s %f\n", name, reading, value );
-#endif
-    EnqueueToFhem ( buffer );
+	int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^%s^%f')}\n", fbridge_id, type, id, reading, value );
+    
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
+    }
 }
 
 
-void PushBridge::SetNodeState ( void * restNode, int type, bool reading, int level )
+void PushBridge::SetNodeState ( RestNodeBase * rnode, char type, int id, bool reading, int level )
 {
     DEBUGFTRACE ( "SetNodeState" );
-    if ( !restNode )
-        return;
 
-    if ( acceptActive ) {
-        UpdatePushNode ( restNode, type );
-    }
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( !PushBridge::fhemActive ) {
+    if ( id <= 0 ) {
+        DEBUGV ( "SetNodeState: Error Invalid id for " << type << id << " fbridge_id [ " << fbridge_id << " ]" );
         return;
     }
-
-    PushDevice * device = GetNodeDevice ( restNode, type );
-    if ( !device )
-        return;
-    const char * name = device->name.c_str ();
     
-    DEBUGFTRACE ( "SetNodeState " << GetNodeType ( device->type ) << ": " << name << " " << reading );
+    if ( rnode->needsRestUpdate ) rnode->UpdateToFhem ();
+    
+    DEBUGV2 ( "SetNodeState: " << reading << " " << level << " to device " << type << id );
 
     char buffer [ 256 ];
-#ifdef ENABLE_BULK_UPDATE	
-	snprintf ( buffer, 256, "{pushupd('%s^state^%s^onoff^%d')}\n", name, reading ? "on" : "off", reading ? 1 : 0 );
+	int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^state^%s^onoff^%d')}\n", fbridge_id, type, id, reading ? "on" : "off", reading ? 1 : 0 );
 	
-    EnqueueToFhem ( buffer );
+    if ( fhemActive && fbridge_id > 0 )
+        EnqueueToFhem ( buffer );
+
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
+    }
 	
 	if ( level >= 0 ) {		
 		int slevel = reading ? level : 0;
 		int spct = reading ? ( ( level * 100 ) / 253 ) : 0;
 		
-		snprintf ( buffer, 256, "{pushupd('%s^level^%d^bri^%d^pct^%d')}\n", name, slevel, slevel, spct );
+		int len = snprintf ( buffer, 256, "{pushupd1('%i^%c^%i^level^%d^bri^%d^pct^%d')}\n", fbridge_id, type, id, slevel, slevel, spct );
 		
-		EnqueueToFhem ( buffer );
+        if ( fhemActive && fbridge_id > 0 )
+		    EnqueueToFhem ( buffer );
+
+        if ( pushActive ) {
+            EnqueueToPush ( buffer, len );
+        }
 	}
-#else
-    snprintf ( buffer, 256, "setreading %s state %s\nsetreading %s onoff %d\n", name, reading ? "on" : "off", name, reading ? 1 : 0 );
-
-    EnqueueToFhem ( buffer );
-#endif
-    
-    //if ( device->node )
-	//	apsInst->updateNode ( *device->node );
 }
 
 
-void PushBridge::SetGroupInfo ( QString & groupName, QString & id, const char * reading, uint32_t value )
+void PushBridge::SetGroupInfo ( QString & qid, const char * reading, uint32_t value )
 {
-    DEBUGV2 ( "SetGroupInfo 1" );
+    if ( !reading ) return;
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( fhemActive ) {
-        PushGroup * group = GetPushGroup ( groupName );
-        if ( !group  ) {
-            return;
-        }
+    DEBUGV ( "SetGroupInfo 2: " << qPrintable ( qid ) << " " << reading << " [ " << value << " ]" );
 
-        SetGroupInfo ( group->name.c_str (), id, reading, value );
-    }
-    else if ( acceptActive  ) {
-        UpdatePushGroup ( id );
-    }
-}
+    int id = qid.toInt ();
+    if ( id <= 0 ) { return; }
 
+    char buffer [ 128 ];
+    int len = snprintf ( buffer, 128, "{pushupd1('%i^g^%i^%s^%i')}\n", fbridge_id, id, reading, value );
 
-void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char * reading, uint32_t value )
-{
-    DEBUGV ( "SetGroupInfo 2: " << groupName << " " << reading );
-
-    if ( fhemActive ) {
-        char buffer [ 128 ];
-#ifdef ENABLE_BULK_UPDATE1
-	    snprintf ( buffer, 128, "{pushupd('%s^%s^%i')}\n", groupName, reading, value );
-#else
-        snprintf ( buffer, 128, "setreading %s %s %i\n", groupName, reading, value );
-#endif
+    if ( fhemActive && fbridge_id > 0 )
         EnqueueToFhem ( buffer );
-    }
 
-    if ( acceptActive  ) {
-        UpdatePushGroup ( id );
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
     }
 }
 
 
-void PushBridge::SetGroupInfo ( const char * groupName, QString & id, const char * reading, float value )
+void PushBridge::SetGroupInfo ( QString & qid, const char * reading, float value )
 {
-    DEBUGFTRACE ( "SetGroupInfo 3: " << groupName << " " << reading );
+    if ( !reading ) return;
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( fhemActive ) {
-        char buffer [ 128 ];
-#ifdef ENABLE_BULK_UPDATE1
-	    snprintf ( buffer, 128, "{pushupd('%s^%s^%f')}\n", groupName, reading, value );
-#else
-        snprintf ( buffer, 128, "setreading %s %s %f\n", groupName, reading, value );
-#endif
+    DEBUGFTRACE ( "SetGroupInfo 3: " << qPrintable ( qid ) << " " << reading << " [ " << value << " ]" );
+
+    int id = qid.toInt ();
+    if ( id <= 0 ) { return; }
+
+    char buffer [ 128 ];
+    int len = snprintf ( buffer, 128, "{pushupd1('%i^g^%i^%s^%f')}\n", fbridge_id, id, reading, value );
+
+    if ( fhemActive && fbridge_id > 0 )
         EnqueueToFhem ( buffer );
-    }
 
-    if ( acceptActive  ) {
-        UpdatePushGroup ( id );
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
     }
 }
 
 
-void PushBridge::SetGroupInfo ( QString & qgroupName, QString & id, const char * reading, const char * value )
+void PushBridge::SetGroupInfo ( QString & qid, const char * reading, const char * value )
 {
-    DEBUGFTRACE ( "SetGroupInfo 4: " << qPrintable ( qgroupName ) << " " << reading );
+    if ( !reading || !value ) return;
+    if ( !fhemActive && !pushActive ) { return; }
 
-    if ( fhemActive ) {
-        PushGroup * group = GetPushGroup ( qgroupName );
-        if ( !group  ) {
-            return;
-        }
-        
-        const char * groupName = group->name.c_str ();
-        
-        char buffer [ 128 ];
-#ifdef ENABLE_BULK_UPDATE1
-	    snprintf ( buffer, 128, "{pushupd('%s^%s^%s')}\n", groupName, reading, value );
-#else
-        snprintf ( buffer, 128, "setreading %s %s %s\n", groupName, reading, value );
-#endif
+    DEBUGFTRACE ( "SetGroupInfo 4: " << qPrintable ( qid ) << " " << reading << " [ " << value << " ]" );
+
+    int id = qid.toInt ();
+    if ( id <= 0 ) { return; }
+
+    char buffer [ 128 ];
+    int len = snprintf ( buffer, 128, "{pushupd1('%i^g^%i^%s^%s')}\n", fbridge_id, id, reading, value );
+
+    if ( fhemActive && fbridge_id > 0 )
         EnqueueToFhem ( buffer );
-    }
 
-    if ( acceptActive  ) {
-        UpdatePushGroup ( id );
+    if ( pushActive ) {
+        EnqueueToPush ( buffer, len );
     }
 }
 
 
-PushGroup * PushBridge::GetPushGroup ( QString & groupName, bool checkCfg )
+PushGroup * PushBridge::GetPushGroup ( QString & qid )
 {
     DEBUGFTRACE ( "GetPushGroup" );
-	if ( groupName.length () <= 0 )
+	if ( qid.length () <= 0 )
 		return 0;
 
 	PushGroup	* group		= 0;
-	const char	* dename	= qPrintable ( groupName );
+	int id	= qid.toInt ();
 
 	if ( !pthread_mutex_lock ( &groupLock ) )
 	{
-		map < std::string, PushGroup * >::iterator it = groups.find ( dename );
+		map < int, PushGroup * >::iterator it = groups.find ( id );
 		if ( it != groups.end () )
 		{
 			group = it->second;
 		}
 		else {
-			DEBUGV ( "GetPushGroup: fhemname for " << dename << " NOT found." );
+			DEBUGV ( "GetPushGroup: PushGroup for " << id << " NOT found. Creating new ..." );
+            group = new PushGroup ();
+            
+            if ( group ) {
+                groups [ id ] = group;
+            }
 		}
 
 		if ( pthread_mutex_unlock ( &groupLock ) ) {
 			DEBUGV ( "GetPushGroup: Failed to unlock." );
-		}
-		
-		if ( !group && checkCfg ) {
-            RequestConfigFile ();
-
-			CheckConfigFile ();
-			
-			group = GetPushGroup ( groupName, false );
 		}
 	}
     
@@ -926,56 +914,53 @@ PushGroup * PushBridge::GetPushGroup ( QString & groupName, bool checkCfg )
 
 void PushGroup::Update ( QString & id, bool o, uint16_t x, uint16_t y, uint16_t h, float hf, uint16_t s, uint16_t l, uint16_t temp )
 {
-    if ( !pushBridge.fhemActive )
-        return;
+    if ( !pushBridge.fhemActive && !pushBridge.pushActive ) { return; }
 
     DEBUGFTRACE ( "PushGroup::Update" );
-    
-    const char * groupName = name.c_str ();
 
     if ( on != o ) {
         on = o;
-        pushBridge.SetGroupInfo ( groupName, id, "reachable", ( uint32_t ) 1 );
-    //    pushBridge.SetGroupInfo ( groupName, id, "on", ( uint32_t ) ( o ? 1 : 0 ) );
+        pushBridge.SetGroupInfo ( id, "reachable", ( uint32_t ) 1 );
+    //    pushBridge.SetGroupInfo ( id, "on", ( uint32_t ) ( o ? 1 : 0 ) );
     }
 
     if ( colorX != x ) {
         colorX = x;
-        pushBridge.SetGroupInfo ( groupName, id, "colorX", ( uint32_t ) x );
+        pushBridge.SetGroupInfo ( id, "colorX", ( uint32_t ) x );
     }
 
     if ( colorY != y ) {
         colorY = y;
-        pushBridge.SetGroupInfo ( groupName, id, "colorY", ( uint32_t ) y );
+        pushBridge.SetGroupInfo ( id, "colorY", ( uint32_t ) y );
     }
 
     if ( hue != h ) {
         hue = h;
-        pushBridge.SetGroupInfo ( groupName, id, "hue", ( uint32_t ) h );
+        pushBridge.SetGroupInfo ( id, "hue", ( uint32_t ) h );
     }
 
     if ( sat != s ) {
         sat = s;
-        pushBridge.SetGroupInfo ( groupName, id, "sat", ( uint32_t ) s );
+        pushBridge.SetGroupInfo ( id, "sat", ( uint32_t ) s );
     }
 
     if ( level != l ) {
         level = l;
-        pushBridge.SetGroupInfo ( groupName, id, "level", ( uint32_t ) l );
-        pushBridge.SetGroupInfo ( groupName, id, "bri", ( uint32_t ) l );
+        pushBridge.SetGroupInfo ( id, "level", ( uint32_t ) l );
+        pushBridge.SetGroupInfo ( id, "bri", ( uint32_t ) l );
         
 		int pct = l ? ( ( l * 100 ) / 253 ) : 0;
-        pushBridge.SetGroupInfo ( groupName, id, "pct", ( uint32_t ) pct );
+        pushBridge.SetGroupInfo ( id, "pct", ( uint32_t ) pct );
     }
 
     if ( colorTemperature != temp ) {
         colorTemperature = temp;
-        pushBridge.SetGroupInfo ( groupName, id, "colorTemperature", ( uint32_t ) temp );
+        pushBridge.SetGroupInfo ( id, "colorTemperature", ( uint32_t ) temp );
     }
 
     if ( hueFloat != hf ) {
         hueFloat = hf;
-        pushBridge.SetGroupInfo ( groupName, id, "hueReal", hf );
+        pushBridge.SetGroupInfo ( id, "hueReal", hf );
     }
 }
 
@@ -1003,6 +988,7 @@ void PushBridge::SignalFhemThread ()
 void PushBridge::EmptyFhemQueue ()
 {
     DEBUGFTRACE ( "EmptyFhemQueue" );
+
     if ( !pthread_mutex_lock ( &fhemQueueLock ) )
     {
         while ( !fhemQueue.empty () ) {
@@ -1015,19 +1001,40 @@ void PushBridge::EmptyFhemQueue ()
 	        DEBUGV ( "EmptyFhemQueue: Failed to unlock." );
         }
     }
+
+    DEBUGFTRACE ( "EmptyFhemQueue: done" );
+}
+
+
+void PushBridge::EmptyPushQueue ()
+{
+    DEBUGFTRACE ( "EmptyPushQueue" );
+
+    if ( !pthread_mutex_lock ( &pushLock ) )
+    {
+        while ( !pushQueue.empty () ) {
+            char * cmd = pushQueue.front ();
+            pushQueue.pop ();
+            free ( cmd );
+        }
+
+        if ( pthread_mutex_unlock ( &pushLock ) ) {
+	        DEBUGV ( "EmptyPushQueue: Failed to unlock." );
+        }
+    }
+
+    DEBUGFTRACE ( "EmptyPushQueue: done" );
 }
 
 
 void PushBridge::EnqueueToFhem ( const char * cmd )
 {
+    if ( !cmd ) return;
+
     DEBUGFTRACE ( "EnqueueToFhem" );
-    if ( !enable_fhem_tunnel )
-        return;
+    if ( !enable_fhem_tunnel ) return;
         
     DEBUGFTRACE ( "EnqueueToFhem:" );
-
-    if ( !cmd )
-        return;
 
     char * item = strdup ( cmd );
     if ( !item )
@@ -1057,8 +1064,315 @@ void PushBridge::EnqueueToFhem ( const char * cmd )
 }
 
 
-void PushBridge::SendToFhem ( const char * cmd )
+void PushBridge::EnqueueToPush ( char * cmd, int len )
 {
+    if ( !cmd ) return;
+
+    DEBUGFTRACE ( "EnqueueToPush" );
+
+    if ( pushQueue.size () >= 42 || len <= 12 ) return;
+
+    char * item = strdup ( cmd + 11 );
+    if ( !item ) return;
+
+    len -= 15;
+    item [ len ] = '\n';
+    item [ len + 1 ] = 0;
+
+    DEBUGFTRACE ( "EnqueueToPush: " << item );
+
+    if ( !pthread_mutex_lock ( &pushLock ) )
+    {
+        if ( pushQueue.size () < 42 )
+        {
+            pushQueue.push ( item );
+            item = 0;
+        }
+
+        if ( pthread_cond_broadcast ( &pushSignal ) ) {
+	        DEBUGV ( "EnqueueToPush: Failed to signal." );
+        }
+
+        if ( pthread_mutex_unlock ( &pushLock ) ) {
+	        DEBUGV ( "EnqueueToPush: Failed to unlock." );
+        }
+    }
+    else {
+	    DEBUGV ( "EnqueueToPush: Failed to lock." );
+    }
+
+    if ( item )
+        free ( item );
+
+    DEBUGFTRACE ( "EnqueueToPush: done." );
+}
+
+
+#ifdef USE_SSL
+
+void sslError ( const char * arg, int res, BIO * bio )
+{
+	printf ( "Error [ %i ] in [ %s ]\n", res, arg );
+
+    DEBUGFTRACE ( "sslError: [ " << res << " ]" << " [ " << arg << " ]" );
+
+	ERR_print_errors_fp ( stderr );
+
+	if ( bio ) { ERR_print_errors ( bio ); }
+}
+
+
+int CertVerifyier ( int preResult, X509_STORE_CTX * ctx )
+{
+	char buffer [ 1024 ];
+
+	X509 * cert = X509_STORE_CTX_get_current_cert ( ctx );
+	if ( cert ) {
+		X509_NAME * issuer = X509_get_issuer_name ( cert );
+		if ( issuer ) {
+			X509_NAME_oneline ( issuer, buffer, 1024 );
+            DEBUGFTRACE ( "CertVerifyier: Issuer [ " << buffer << " ]" );
+		}
+
+		X509_NAME * subject = X509_get_subject_name ( cert );
+		if ( subject ) {
+			X509_NAME_oneline ( subject, buffer, 1024 );
+            DEBUGFTRACE ( "CertVerifyier: Subject [ " << buffer << " ]" );
+		}
+	}
+	return 1; // Ignore verification process as we assume self-signed certificates ...
+	//return preResult;
+}
+
+
+bool EstablishSSL ( SSL_CTX * &ctx, BIO * &web, SSL * &ssl, const char * host, int port )
+{
+	long res = 1;
+	char hostAndPort [ 1024 ];
+
+	const SSL_METHOD* method = SSLv23_method ();
+	if ( !method ) {
+		sslError ( "SSLv23_method", 0, 0 ); return false;
+	}
+	
+	ctx = SSL_CTX_new ( method );
+	if ( !ctx ) {
+		sslError ( "SSL_CTX_new", 0, 0 ); return false;
+	}
+
+	SSL_CTX_set_verify ( ctx, SSL_VERIFY_PEER, CertVerifyier );
+
+	SSL_CTX_set_verify_depth ( ctx, 4 );
+
+	const long flags = SSL_OP_NO_COMPRESSION;
+	SSL_CTX_set_options ( ctx, flags );
+
+	res = SSL_CTX_load_verify_locations ( ctx, "certs.pem", NULL );
+#ifdef DEBUG
+	if ( res != 1 ) { sslError ( "SSL_CTX_load_verify_locations", res, 0 ); }
+#endif
+	web = BIO_new_ssl_connect ( ctx );
+	if ( !web ) {
+		sslError ( "BIO_new_ssl_connect", 0, web ); return false;
+	}
+
+	int len = snprintf ( hostAndPort, 1024, "%s:%i", host, port );
+	if ( len <= 0 ) {
+		printf ( "Error building host and port.\n" );
+		return false;
+	}
+
+	res = BIO_set_conn_hostname ( web, hostAndPort );
+	if ( res != 1 ) {
+		sslError ( "BIO_set_conn_hostname", res, web ); return false;
+	}
+	
+	BIO_get_ssl ( web, &ssl );
+	if ( !ssl ) {
+		sslError ( "BIO_get_ssl", 0, web ); return false;
+	}
+
+	const char* const ciphersList = "ALL";
+	res = SSL_set_cipher_list ( ssl, ciphersList );
+	if ( res != 1 ) {
+		sslError ( "SSL_set_cipher_list", res, 0 ); return false;
+	}
+
+	res = SSL_set_tlsext_host_name ( ssl, host );
+	if ( res != 1 ) {
+		sslError ( "SSL_set_tlsext_host_name", res, 0 ); return false;
+	}
+
+	res = BIO_do_connect ( web );
+	if ( res != 1 ) {
+		sslError ( "BIO_do_connect", res, web ); return false;
+	}
+
+	res = BIO_do_handshake ( web );
+	if ( res != 1 ) {
+		sslError ( "BIO_do_handshake", res, web ); return false;
+	}
+
+	res = BIO_get_fd ( web, 0 );
+	if ( res < 0 ) {
+		sslError ( "BIO_get_fd", res, web );
+	}
+	else {		
+		int value = 1;
+		int rc = setsockopt ( res, IPPROTO_TCP, TCP_NODELAY, ( const char * ) &value, sizeof ( value ) );
+		if ( rc < 0 ) {
+			sslError ( "setsockopt", rc, 0 );
+		}
+	}
+
+	/* Make sure that a server cert is available */
+	X509* cert = SSL_get_peer_certificate ( ssl );
+	if ( cert ) { 
+		X509_free ( cert ); 
+	}
+	else {
+		sslError ( "SSL_get_peer_certificate", 0, 0 ); return false;
+	}
+	if ( NULL == cert ) sslError ( "SSL_get_peer_certificate", 0, 0 );
+
+	res = SSL_get_verify_result ( ssl );
+#ifdef DEBUG
+	if ( X509_V_OK != res ) { sslError ( "SSL_get_verify_result", 0, 0 ); }
+#endif
+
+	return true;
+}
+
+#endif
+
+
+bool PushBridge::EstablishAuthSSL ( )
+{
+#ifdef USE_SSL
+    DEBUGFTRACE ( "EstablishAuthSSL" );
+
+	DisposeSSL ( ssl_ctx, ssl_web );
+
+    SSL_CTX     *   ctx = ( SSL_CTX * ) ssl_ctx;
+    BIO         *   web = ( BIO * ) ssl_web;
+    SSL         *   ssl = ( SSL * ) ssl_ptr; 
+
+    if ( EstablishSSL ( ctx, web, ssl, fhem_ip_addr.c_str (), fhem_port ) )
+    {
+        ssl_ctx = ( void * ) ctx;
+        ssl_web = ( void * ) web;
+        ssl_ptr = ( void * ) ssl;
+
+        if ( fhemPassword.size () <= 0 ) {
+            DEBUGFTRACE ( "EstablishAuthSSL: Connected. No password found." );
+            return true;
+        }
+
+		int reads = 0; int len = 0;
+                
+		do
+		{
+			char buffer [ 2096 ] = { };
+
+			len = BIO_read ( web, buffer, sizeof ( buffer ) );
+			reads++;
+
+			if ( len > 0 ) {
+                DEBUGFTRACE ( "EstablishAuthSSL: " << buffer );
+
+				if ( strstr ( buffer, "Password:" ) ) {
+                    DEBUGFTRACE ( "EstablishAuthSSL: [ " << reads << " / " << len << " ] [ " << buffer << " ]" );
+
+					if ( BIO_puts ( web, fhemPassword.c_str () ) <= 0 ) {
+                        DEBUGFTRACE ( "Error writing password" ); break;
+					}
+					if ( BIO_puts ( web, "\n" ) <= 0 ) {
+						DEBUGFTRACE ( "Error writing newline" ); break;
+					}
+					if ( BIO_flush ( web ) <= 0 ) {
+						DEBUGFTRACE ( "Error flushing buffer" );
+					}
+                    return true;
+				}
+				buffer [ len ] = 0;
+                DEBUGFTRACE ( "EstablishAuthSSL: [ " << reads << " / " << len << " ] [ " << buffer << " ]" );
+			}
+			else {
+                DEBUGFTRACE ( "EstablishAuthSSL: [ " << reads << " / " << len << " ]" );
+			}
+
+            if ( reads > 30 ) {
+                DEBUGFTRACE ( "EstablishAuthSSL: Giving up due to reads > 30!" ); break;
+            }
+		}
+		while ( len > 0 || BIO_should_retry ( web ) );
+    }
+
+    DisposeSSL ( ssl_ctx, ssl_web );
+#endif
+
+    return false;
+}
+
+
+bool PushBridge::SendToFhemSSL ( const char * cmd )
+{
+    DEBUGFTRACE ( "SendToFhemSSL:" << cmd );
+
+#ifdef USE_SSL
+    bool retried = false;
+
+Retry:
+    if ( !ssl_ctx ) {
+        if ( !EstablishAuthSSL () ) {
+            DEBUGFTRACE ( "SendToFhemSSL: Failed to establish ssl session!" ); return false;
+        }
+        
+        fhemListenerRun = true;
+
+        pthread_create ( &fhemListener, 0, FhemListenerStarter, this );
+    }
+
+    size_t len = strlen ( cmd );
+
+    DEBUGFTRACE ( "SendToFhemSSL: send to FHEM ..." );
+
+    BIO         *   web = ( BIO * ) ssl_web;
+
+    int bytesSent = ( int ) BIO_puts ( web, cmd );
+
+    if ( BIO_flush ( web ) <= 0 ) {
+        DEBUGFTRACE ( "SendToFhemSSL: Error flushing buffer" );
+    }
+    
+    if ( bytesSent != ( int ) len ) {
+        DEBUGV ( "SendToFhemSSL: Failed to send to FHEM." );
+
+		fhemListenerRun = false;
+
+        DisposeSSL ( ssl_ctx, ssl_web );
+
+        if ( !retried ) {
+            retried = true;
+            goto Retry;
+        }
+        
+        return false;
+        //EmptyFhemQueue ();        
+    }
+        
+    DEBUGV ( "SendToFhem: " << cmd );
+#endif
+    return true;
+}
+
+
+bool PushBridge::SendToFhem ( const char * cmd )
+{
+    if ( fhemSSL ) {
+        return SendToFhemSSL ( cmd );
+    }
+
     DEBUGFTRACE ( "SendToFhem:" << cmd );
 
     bool retried = false;
@@ -1066,14 +1380,14 @@ void PushBridge::SendToFhem ( const char * cmd )
 Retry:
     if ( fhemSocket < 0 ) {
         // Create socket
-        DEBUGV ( "PushBridge::SendToFhem: Creating socket ..." );
+        DEBUGV ( "SendToFhem: Creating socket ..." );
 
         int sock = ( int ) socket ( PF_INET, SOCK_STREAM, 0 );
         if ( sock < 0 ) {
-            DEBUGV ( "PushBridge::SendToFhem: Failed to create socket." );
+            DEBUGV ( "SendToFhem: Failed to create socket." );
 
-            EmptyFhemQueue ();
-            return;
+            //EmptyFhemQueue ();
+            return false;
         }
         
 		struct sockaddr_in  addr;
@@ -1081,31 +1395,48 @@ Retry:
 
 		addr.sin_family		    = PF_INET;
 		addr.sin_port		    = htons ( fhem_port );
-		addr.sin_addr.s_addr	= htonl ( INADDR_LOOPBACK );
 
-        DEBUGV ( "PushBridge::SendToFhem: Connecting to FHEM ..." );
+        inet_aton ( fhem_ip_addr.c_str (), &addr.sin_addr );
+		//addr.sin_addr.s_addr	= htonl ( INADDR_LOOPBACK );
+
+        DEBUGV ( "SendToFhem: Connecting to FHEM ..." );
 
         int rc = ::connect ( sock, (struct sockaddr *) & addr, sizeof ( struct sockaddr_in ) );
         if ( rc < 0 ) {
-            DEBUGV ( "PushBridge::SendToFhem: Failed to connect to FHEM." );
+            DEBUGV ( "SendToFhem: Failed to connect to FHEM." );
 
             EmptyFhemQueue ();
 
             ::close ( sock );
-            return;
+            return false;
         }
         else {
-            fhemSocket = sock;
+            fhemSocket = sock; fhemListenerRun = true; conectTime = time ( 0 );
+
+            pthread_create ( &fhemListener, 0, FhemListenerStarter, this );
         }
     }
     
+    if ( !fhemAuthOK ) {
+        uint64_t t = time ( 0 );
+        if ( conectTime - t > 4 ) {
+            fhemAuthOK = true;
+        }
+        else {
+            DEBUGFTRACE ( "SendToFhem: Awaiting authentication." );
+            return false;
+        }
+    }
+
     size_t len = strlen ( cmd );
 
-    DEBUGFTRACE ( "PushBridge::SendToFhem: send to FHEM ..." );
+    DEBUGFTRACE ( "SendToFhem: send to FHEM ..." );
 
     int bytesSent = ( int ) ::send ( fhemSocket, cmd, len, MSG_NOSIGNAL );
     if ( bytesSent != ( int ) len ) {
-        DEBUGV ( "PushBridge::SendToFhem: Failed to send to FHEM." );
+        DEBUGV ( "SendToFhem: Failed to send to FHEM." );
+
+		fhemListenerRun = false;
 
         ::close ( fhemSocket );
         fhemSocket = -1;
@@ -1115,27 +1446,13 @@ Retry:
             goto Retry;
         }
         
-        EmptyFhemQueue ();
+        return false;
+        //EmptyFhemQueue ();
     }
-    else {
-        DEBUGV ( "SendToFhem: " << cmd );
-
-        char buffer [ 128 ];
-        *buffer = 0;
-
-        int rc = recv ( fhemSocket, buffer, 127, MSG_DONTWAIT );
-        if ( rc > 0 ) {
-            if ( rc > 127 )
-                rc = 127;
-            buffer [ rc ] = 0;
-            DEBUGV ( "SendToFhem: Response: " << cmd );
-
-            if ( strstr ( buffer, "Please define" ) ) {
-                DEBUGV ( "SendToFhem: Please define found." );
-                CheckConfigFile ();
-            }
-        }
-    }
+        
+    DEBUGV ( "SendToFhem: " << cmd );
+        
+    return true;
 }
 
 
@@ -1145,10 +1462,20 @@ void PushBridge::FhemThread ()
 
     DEBUGV ( "FhemThread started ..." );
 
+#ifdef USE_SSL
+    if ( fhemSSL && !fhemSSLInitialized ) {
+        ( void ) SSL_library_init ();
+
+        SSL_load_error_strings ();
+        
+        fhemSSLInitialized = true;
+    }
+#endif
+
     bool doUnlock = true;
     
-    // Request creation of config file
-    RequestConfigFile ();
+    // Request configuration
+    RequestConfig ();
 
     if ( !pthread_mutex_lock ( &fhemQueueLock ) )
     {
@@ -1158,21 +1485,26 @@ void PushBridge::FhemThread ()
 
             if ( !fhemQueue.empty () ) {
                 cmd = fhemQueue.front ();
-                fhemQueue.pop ();
             }
 
             if ( cmd ) {
+                bool ok;
+
                 if ( pthread_mutex_unlock ( &fhemQueueLock ) ) {
                     DEBUGV ( "FhemThread: Failed to unlock." );
                     doUnlock = false; break;
                 }
 
-                SendToFhem ( cmd );
-                free ( cmd );
+                ok = SendToFhem ( cmd );
 
                 if ( pthread_mutex_lock ( &fhemQueueLock ) ) {
                     DEBUGV ( "FhemThread: Failed to lock." );
                     doUnlock = false; break;
+                }
+
+                if ( ok ) {
+                    fhemQueue.pop ();
+                    free ( cmd );
                 }
                 continue;
             }
@@ -1203,6 +1535,173 @@ void * PushBridge::FhemThreadStarter ( void * arg )
 }
 
 
+char * getNextSep ( char * tmp )
+{
+    while ( 1 ) {
+        char c = *tmp;
+        if ( !c || c == '\n' )
+            break;
+
+        if ( c == ';' )
+            return tmp;
+        tmp++;
+    }
+    return 0;
+}
+
+
+void PushBridge::FhemListener ()
+{
+    fhemListenerActive = true;
+
+    DEBUGV ( "FhemListener started ..." );
+
+    char    buffer [ 1024 ];
+
+    while ( fhemListenerRun && ( fhemSocket >= 0 || ssl_web ) )
+    {
+        int rc;
+#ifdef USE_SSL
+        if ( fhemSSL ) {
+            if ( !ssl_web ) {
+                DEBUGFTRACE ( "FhemListener: Closing due to invalid ssl_web!" );
+                break;
+            }
+
+            BIO * web = ( BIO * ) ssl_web;
+
+			rc = BIO_read ( web, buffer, 1023 );
+            DEBUGFTRACE ( "FhemListener: ssl response length " << rc );
+        }
+        else
+#endif
+            rc = ::recv ( fhemSocket, buffer, 1023, 0 );
+
+        if ( rc <= 0 ) {
+            break;
+        }
+
+        DEBUGV ( "FhemListener: Response: " << buffer );
+        DEBUGFTRACE ( "FhemListener: Response: " << buffer );
+
+        if ( strstr ( buffer, "deCONZ_value:" ) != buffer ) {
+            if ( fhemSocket >= 0 && strstr ( buffer, "Password:" ) ) {
+			    int len = snprintf ( buffer, 1023, "%s\n", fhemPassword.c_str () );
+                
+                int bytesSent = ( int ) ::send ( fhemSocket, buffer, len, MSG_NOSIGNAL );
+                if ( bytesSent != ( int ) len ) {
+                    DEBUGV ( "SendToFhem: Failed to send password." );
+                    break;
+                }
+                fhemAuthOK = true; SignalFhemThread ();
+                continue;
+            }
+            continue;
+        }
+        
+
+        bool restartFhemThread  = false;
+        bool restartPushThread  = false;
+
+        DEBUGV ( "FhemListener: Parsing ... " );
+
+        char * conf = buffer + sizeof ( "deCONZ_value:" ) - 1;
+        while ( 1 ) {
+            char * next = getNextSep ( conf );
+
+            if ( next ) *next = 0;
+
+            DEBUGV ( "FhemListener: Opt " << conf );
+
+            if ( strstr ( conf, "NR:" ) == conf ) {
+                fbridge_id = atoi ( conf + sizeof("NR:")  - 1 );
+                DEBUGV ( "FhemListener: fbridge_id " << fbridge_id );
+
+                SaveCache ();
+            }
+            else if ( strstr ( conf, "disable:" ) == conf ) {
+                DEBUGV ( "FhemListener: disable " << conf [ sizeof("disable:") - 1 ] );
+                if ( conf [ sizeof("disable:") - 1 ] == '1' ) {
+                    enable_plugin = false; restartFhemThread = true; restartPushThread = true;
+                    break; 
+                }
+            }
+            else if ( strstr ( conf, "disablefhem:" ) == conf ) {
+                bool value = ( conf [ sizeof("disablefhem:") - 1 ] == '1' ? true : false );
+                DEBUGV ( "FhemListener: disablefhem " << value );
+                if ( value != enable_fhem_tunnel ) {
+                    enable_fhem_tunnel = value; restartFhemThread = true;
+                }
+            }
+            else if ( strstr ( conf, "disablepush:" ) == conf ) {
+                bool value = ( conf [ sizeof("disablepush:") - 1 ] == '1' ? true : false );
+                DEBUGV ( "FhemListener: disablepush " << value );
+                if ( value != enable_push ) {
+                    enable_push = value; restartPushThread = true;
+                }
+            }
+            else if ( strstr ( conf, "nonodeupdate:" ) == conf ) {
+                fhem_node_update = ( conf [ sizeof("nonodeupdate:") - 1 ] == '1' );
+                DEBUGV ( "FhemListener: nonodeupdate " << fhem_node_update );
+            }
+            else if ( strstr ( conf, "fport:" ) == conf ) {
+                 int value = atoi ( conf + sizeof("fport:") - 1 );
+                DEBUGV ( "FhemListener: fport " << value );
+                 if ( value != fhem_port ) {
+                     fhem_port = value; restartFhemThread = true;
+                 }
+            }
+            else if ( strstr ( conf, "pport:" ) == conf ) {
+                 int value = atoi ( conf + sizeof("pport:") - 1 );
+                 DEBUGV ( "FhemListener: pport " << value );
+                 if ( value != bridge_push_port ) {
+                     bridge_push_port = value; restartPushThread = true;
+                 }
+            }
+            else if ( strstr ( conf, "ssl:" ) == conf ) {
+                bool ssl = ( conf [ sizeof("ssl:") - 1 ] == '1' );
+                DEBUGV ( "FhemListener: ssl " << ssl );
+                if ( ssl != fhemSSL ) {
+                    fhemSSL = ssl; restartFhemThread = true;
+                }
+            }
+            else if ( strstr ( conf, "fpass:" ) == conf ) {
+                string value = ( conf + sizeof("fpass:") - 1);
+                //DEBUGV ( "FhemListener: fpass " << value );
+                DEBUGV ( "FhemListener: fpass ..." );
+                if ( fhemPassword.compare ( value ) ) {
+                    fhemPassword = value;
+                    restartFhemThread = true;
+                    DEBUGFTRACE ( "LoadConfigFile: Using fhem new password " );
+                }
+            }
+
+            if ( !next ) 
+                break;
+
+            conf = next + 1;
+        }
+
+        if ( restartPushThread ) HandlePushThread ();
+
+        if ( restartFhemThread ) {
+            HandleFhemThread ();
+            break;
+        }
+    }
+
+    fhemListenerActive = false;
+
+    DEBUGV ( "FhemListener bye bye." );
+}
+
+void * PushBridge::FhemListenerStarter ( void * arg )
+{
+    ((PushBridge *) arg)->FhemListener ();
+    return 0;
+}
+
+
 void PushBridge::AcceptThread ()
 {
     acceptActive = true;
@@ -1221,12 +1720,19 @@ void PushBridge::AcceptThread ()
             break;
         }
 
+        int value = 1;
+        setsockopt ( acceptSocket, SOL_SOCKET, SO_REUSEADDR, ( const char * ) &value, sizeof ( value ) );
+        
+#ifdef SO_REUSEPORT
+        value = 1;
+        setsockopt ( acceptSocket, SOL_SOCKET, SO_REUSEPORT, ( const char * ) &value, sizeof ( value ) );
+#endif
         struct sockaddr_in  addr;
         memset ( &addr, 0, sizeof ( addr ) );
 
         addr.sin_family		    = PF_INET;
-        addr.sin_port		    = htons ( push_port );
-        addr.sin_addr.s_addr	= htonl ( INADDR_LOOPBACK );
+        addr.sin_port		    = htons ( bridge_push_port );
+        addr.sin_addr.s_addr	= htonl ( INADDR_ANY );
         
         int ret = ::bind ( acceptSocket, ( struct sockaddr * )&addr, sizeof ( addr ) );
         if ( ret < 0 ) {
@@ -1238,7 +1744,7 @@ void PushBridge::AcceptThread ()
         if ( ret < 0 ) {
             DEBUGV ( "PushBridge::AcceptThread: Failed to listen on socket." );
             break;
-        }
+        }        
         
         while ( acceptThreadRun )
         {
@@ -1296,37 +1802,30 @@ void PushBridge::SignalPushThread ()
 }
 
 
-void CollectIDs ( char * buffer, const char * type, std::map < int, int > & ids, size_t & len, int & remain )
+void CollectQueue ( char * buffer, size_t & len, size_t remain, queue < char * > & pushQueue )
 {
-    if ( ids.size () > 0 ) {
-        DEBUGFTRACE ( "CollectIDs: Collecting " << ids.size () << " " << type << " ..." );
+    if ( pushQueue.size () > 0 ) {
+        DEBUGFTRACE ( "CollectQueue: Collecting " << pushQueue.size () << " ..." );
 
-        int chars = snprintf ( buffer + len, remain, type );
-        if ( chars > 0 ) 
-        {
-            len += chars; remain -= len;
+        while ( pushQueue.size () > 0 ) {
+            char * cmd = pushQueue.front ();
 
-            std::map < int, int >::iterator it = ids.begin ();
-            
-            while ( it != ids.end () ) {
-                chars = snprintf ( buffer + len, remain, "%i,", it->first );
-                if ( chars <= 0 )
-                    break;
-                len += chars; remain -= len;
+            size_t size = strlen ( cmd );
+            if ( size < remain ) {
+                pushQueue.pop ();
+                memcpy ( buffer + len, cmd, size );
 
-                ++it;
+                len += size;
+                remain -= size;
+                free ( cmd );
             }
-
-            len--;
-
-            chars = snprintf ( buffer + len, remain, "\n" );
-            if ( chars > 0 ) {
-                len += chars; remain -= len;
+            else {
+                break;
             }
         }
-        ids.clear ();
     }
 }
+
 
 void PushBridge::PushThread ()
 {
@@ -1336,7 +1835,6 @@ void PushBridge::PushThread ()
 
     char    buffer [ 1024 ];
     size_t  len     = 0;
-    bool    wait    = false;
 
     while ( pushThreadRun && pushSocket != -1 )
     {
@@ -1345,7 +1843,7 @@ void PushBridge::PushThread ()
             break;
         }
 
-        if ( wait ) {
+        if ( pushQueue.size () == 0 ) {
             if ( pthread_cond_wait ( &pushSignal, &pushLock ) ) {
                 DEBUGV ( "PushThread: Failed to wait for signal." );
                 break;
@@ -1361,16 +1859,10 @@ void PushBridge::PushThread ()
             break;
         }
 
-        *buffer = 0;
-        
-        int remain  = 1024;
+        *buffer = 0;        
         len     = 0;
 
-        CollectIDs ( buffer, "l: ", pushLights, len, remain );
-
-        CollectIDs ( buffer, "s: ", pushSensors, len, remain );
-
-        CollectIDs ( buffer, "g: ", pushGroups, len, remain );
+        CollectQueue ( buffer, len, 1023, pushQueue );
 
         if ( pthread_mutex_unlock ( &pushLock ) ) {
             DEBUGV ( "PushThread: Failed to lock." );
@@ -1382,19 +1874,14 @@ void PushBridge::PushThread ()
 
             int rc = ::send ( pushSocket, buffer, len, MSG_NOSIGNAL );
             if ( rc > 0 ) {
-                rc = ::recv ( pushSocket, buffer, 10, 0 );
-                if ( rc > 0 && buffer [ 0 ] == '1' ) {
-                    wait = false;   
-                    continue;
+                rc = ::recv ( pushSocket, buffer, 10, MSG_DONTWAIT );
+                if ( rc > 0 && ( strstr ( buffer, "quit" ) == buffer || strstr ( buffer, "exit" ) == buffer ) ) {
+                    ::shutdown ( pushSocket, 2 );
+                    ::close ( pushSocket );
+                    pushSocket = -1;
+                    break;
                 }
             }
-
-            ::close ( pushSocket );
-            pushSocket = -1;
-            break;
-        }
-        else {
-            wait = true;
         }
     }
 
@@ -1416,17 +1903,6 @@ void * PushBridge::PushThreadStarter ( void * arg )
 ////////////////////////////////////////////////////////////////////////////////
 // Debug helper methods
 ////////////////////////////////////////////////////////////////////////////////
-
-const char * GetNodeType ( int type )
-{
-	if ( type == PUSH_TYPE_CONTROLLER ) return "C";
-	if ( type == PUSH_TYPE_PLUG ) return "P";
-	if ( type == PUSH_TYPE_LIGHT ) return "L";
-	if ( type == PUSH_TYPE_SWITCH ) return "S";
-	if ( type == PUSH_TYPE_MOTION ) return "M";
-	return "U";
-}
-
 
 size_t FormatTimeString ( char * timeBuffer, unsigned int bufferSize )
 {
@@ -1506,138 +1982,27 @@ const char * eventNames [ ] = {
 // PushDevice management
 ////////////////////////////////////////////////////////////////////////////////
 
-PushDevice::PushDevice ( uint64_t deviceMac, const char * deviceName ) {
-    SetIdentity ( deviceMac, deviceName );
+PushDevice::PushDevice ( uint64_t deviceMac, char _dtype, int _id, const char * _name ) {
+    SetIdentity ( deviceMac, _dtype, _id, _name );
 }
 
 
 PushDevice::~PushDevice () {}
 
 
-void PushDevice::SetIdentity ( uint64_t deviceMac, const char * deviceName )
+void PushDevice::SetIdentity ( uint64_t deviceMac, char _dtype, int _id, const char * _name )
 {
     DEBUGFTRACE ( "PushDevice::SetIdentity" );
     
     available   = false;
 
-#ifdef ENABLE_REACHABLE_TIMER
-    lastMS  = 0;
-    lastTS  = time ( 0 );
-#endif
-
+    id      = _id;
+    dtype   = _dtype;
+    name    = _name;
     node    = 0;
     mac     = deviceMac;
-    type    = PUSH_TYPE_UNKNOWN;
 
     needsNodeUpdate = true;
-    needsRestUpdate = true;
-
-    if ( !deviceName || strlen ( deviceName ) <= 0 ) {
-        name = UNKNOWN_DEVICE_NAME;
-    }
-    else {
-        name = deviceName;
-    }
-}
-
-
-const char * PushBridge::GetPushName ( uint64_t mac )
-{
-    DEBUGFTRACE ( "GetPushName: mac " << mac );
-
-    PushDevice * device = GetPushDevice ( mac );
-    if ( device ) {
-        return device->name.c_str ();
-    }
-    return UNKNOWN_DEVICE_NAME;
-}
-
-
-PushDevice * PushBridge::GetPushDevice ( uint64_t mac, bool update, bool checkCfg )
-{
-    DEBUGFTRACE ( "GetPushDevice: mac " << mac );
-
-    if ( mac == raspBee.mac ) {
-        DEBUGV2 ( "GetPushDevice: mac " << mac << " found raspBee." );
-        return &raspBee;
-    }
-	
-	PushDevice * device = 0;
-
-	if ( !pthread_mutex_lock ( &devicesLock ) )
-	{
-		map < uint64_t, PushDevice * >::iterator it = devices.find ( mac );
-		if ( it != devices.end () ) {
-			device = it->second;
-		}
-
-		if ( pthread_mutex_unlock ( &devicesLock ) ) {
-			DEBUGV ( "GetPushDevice: Failed to unlock." );
-		}
-
-		if ( device ) {
-			DEBUGV2 ( "GetPushDevice: mac " << mac << " found. type:" << device->type );
-
-#ifdef ENABLE_REACHABLE_TIMER
-			uint64_t curTS = time ( 0 );
-#endif
-            if ( update && ( __sync_val_compare_and_swap ( &device->available, false, true ) == false ) )
-			{
-#ifdef ENABLE_REACHABLE_TIMER
-				uint64_t diff = curTS - device->lastTS;
-				device->lastTS = curTS;
-#endif
-				//device->needsRestUpdate = true;
-
-				if ( fhem_node_update ) {
-					const Node * node = ( Node * ) device->node;
-					if ( node ) {
-						DEBUGV2 ( "GetPushDevice: Updating node. mac:" << device->mac << " name:" << device->name.c_str () );
-
-						apsInst->updateNode ( *node );
-					}
-					else {
-						DEBUGV ( "GetPushDevice: name:" << device->name.c_str () << " node is MISSING!" );
-					}
-				}
-
-				char cmd [ 128 ];
-				const char * name = device->name.c_str ();
-
-#ifdef ENABLE_REACHABLE_TIMER
-				DEBUGV2 ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << name << " ms:" << diff );
-				DEBUGV ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << name << " ms:" << diff );
-#else
-				DEBUGV2 ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << name );
-				DEBUGV ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << name );
-#endif
-
-#ifdef ENABLE_BULK_UPDATE1
-	            snprintf ( cmd, 128, "{pushupd('%s^reachable^1')}\n", name );
-#else
-				snprintf ( cmd, 128, "setreading %s reachable 1\n", name );
-#endif
-				EnqueueToFhem ( cmd );
-			}
-#ifdef ENABLE_REACHABLE_TIMER
-			else {
-				device->lastTS = curTS;
-			}
-#endif
-		}
-		else {
-			DEBUGV ( "GetPushDevice: mac " << mac << " NOT found." );
-		
-            if ( checkCfg ) {
-                RequestConfigFile ();
-
-                CheckConfigFile ();
-                
-                device = GetPushDevice ( mac, true, false );
-            }
-		}
-	}
-    return device;
 }
 
 
@@ -1645,11 +2010,9 @@ void PushBridge::UpdatePushDevice ( PushDevice * device )
 {
     DEBUGFTRACE ( "UpdatePushDevice" );
 
-    if ( !device )
-        return;
-    const char * name = device->name.c_str ();
+    if ( !device ) return;
 
-    if ( device->needsNodeUpdate ) 
+    if ( device->needsNodeUpdate && device->id > 0 ) 
     {
         Node * node = ( Node * ) device->node;
         if ( node )
@@ -1658,10 +2021,9 @@ void PushBridge::UpdatePushDevice ( PushDevice * device )
 
             char cmd [ 512 ];
 
-#ifdef ENABLE_BULK_UPDATE
 			const NodeDescriptor & desc = node->nodeDescriptor ();
 
-			snprintf ( cmd, 512, "{pushupd('%s^userDescriptor^%s^"
+			int len = snprintf ( cmd, 512, "{pushupd1('%i^%c^%i^userDescriptor^%s^"
 				"deviceTypeString^%s^"
 				"manufacturerCode^%i^deviceType^%i^"
 				"macCapabilities^%i^"
@@ -1671,7 +2033,8 @@ void PushBridge::UpdatePushDevice ( PushDevice * device )
 				"securitySupport^%i^"
 				"frequencyBandString^%s"
 				"')}\n",
-				name, qPrintable ( node->userDescriptor () ),
+                fbridge_id, device->dtype, device->id,
+				qPrintable ( node->userDescriptor () ),
 				qPrintable ( node->deviceTypeString () ),
 				desc.manufacturerCode (),
 				( int ) desc.deviceType (),
@@ -1682,106 +2045,15 @@ void PushBridge::UpdatePushDevice ( PushDevice * device )
 				desc.securitySupport () ? 1 : 0,
 				desc.frequencyBandString ()
 			);
-#else
-            snprintf ( cmd, 512,
-                "setreading %s userDescriptor %s\n"
-                "setreading %s deviceTypeString %s\n",
-                name, qPrintable ( node->userDescriptor() ),
-                name, qPrintable ( node->deviceTypeString() )
-                );
-            EnqueueToFhem ( cmd );
-
-            const NodeDescriptor & desc = node->nodeDescriptor ();
-
-            snprintf ( cmd, 512,"setreading %s manufacturerCode %i\nsetreading %s deviceType %i\n"
-                "setreading %s macCapabilities %i\n"
-                "setreading %s isFullFunctionDevice %i\n"
-                "setreading %s isMainsPowered %i\n"
-                "setreading %s receiverOnWhenIdle %i\n"
-                "setreading %s securitySupport %i\n"
-                "setreading %s frequencyBandString %s\n",
-                name, desc.manufacturerCode(),
-                name, (int) desc.deviceType(),
-                name, (int) desc.macCapabilities(), 
-                name, desc.isFullFunctionDevice() ? 1 : 0,
-                name, desc.isMainsPowered() ? 1 : 0,
-                name, desc.receiverOnWhenIdle() ? 1 : 0,
-                name, desc.securitySupport() ? 1 : 0,
-                name, desc.frequencyBandString()
-                );
-#endif
-            EnqueueToFhem ( cmd );
-        }
-    }
-}
-
-
-bool PushBridge::AddPushDevice ( uint64_t mac, const char * name )
-{
-    DEBUGFTRACE ( "AddPushDevice: mac " << mac );
-
-    if ( !mac || !name || strlen ( name ) <= 0 ) {
-        DEBUGV1 ( "AddPushDevice: INVALID mac:" << mac << " or name" );
-        return false;
-    }
-
-    PushDevice * device;
-
-    map < uint64_t, PushDevice * >::iterator it = devices.find ( mac );
-    if ( it != devices.end () ) 
-    {
-        device = it->second;
-        DEBUGV1 ( "PushDevice updating the list mac:" << mac << " name:" << name );
-
-        device->name = name;
-
-        UpdatePushDevice ( device );
-        return false;
-    }
-
-    device = new PushDevice ( mac, name );
-    if ( !device ) {
-        DEBUGV1 ( "Insufficient memory to create PushDevice mac:" << mac << " name:" << name );
-        return false;
-    }
-
-    devices		 [ mac ] = device;
-
-#ifdef ENABLE_REACHABLE_TIMER
-	devicesTimer [ mac ] = device;
-#endif
-
-    DEBUGV1 ( "PushDevice ADDED mac:" << mac << " name:" << name );
-    return true;
-}
-
-
-bool PushBridge::AddPushGroup ( const char * dename, const char * fhemname )
-{
-    DEBUGFTRACE ( "AddPushGroup" );
-
-    if ( !dename || strlen ( dename ) <= 0 || !fhemname || strlen ( fhemname ) <= 0 ) {
-        DEBUGV1 ( "AddPushGroup: INVALID fhemname or deconzname" );
-        return false;
-    }
-
-    map < std::string, PushGroup * >::iterator it = groups.find ( dename );
-    if ( it != groups.end () )
-    {
-        PushGroup * group = it->second;
-        if ( group ) {
-            group->name = fhemname;
-        }
-    }
-    else {
-        PushGroup * group = new PushGroup ( fhemname );
-        if ( group ) {
-            groups [ dename ] = group;
             
-            DEBUGV1 ( "AddPushGroup: group:" << dename << " with fhemname:" << fhemname );
+            if ( fhemActive && fbridge_id > 0 )
+                EnqueueToFhem ( cmd );
+            
+            if ( pushActive ) {
+                EnqueueToPush ( cmd, len );
+            }
         }
     }
-    return true;
 }
 
 
@@ -1821,16 +2093,11 @@ bool PushBridge::UpdatePushDevice ( uint64_t mac, const Node * node )
 			{
 				device->node    = node;
 
-				DEBUGV1 ( "PushDevice updating the list with node, mac:" << mac << " name:" << device->name.c_str () );
+				DEBUGV1 ( "PushDevice updating the list with node, mac:" << mac << " device:" << device->dtype << device->id );
 			}
 #ifdef DEBUG1
 			else {
-				if ( device->name.length () <= 0 ) {
-					DEBUGV1 ( "ERROR: PushDevice already in the list and missing name! mac:" << mac );
-				}
-				else {
-					DEBUGV1 ( "PushDevice already complete mac:" << mac << " name:" << device->name.c_str () );
-				}
+				DEBUGV1 ( "PushDevice already complete mac:" << mac << " device:" << device->dtype << device->id );
 			}
 #endif
 			UpdatePushDevice ( device );
@@ -1840,6 +2107,101 @@ bool PushBridge::UpdatePushDevice ( uint64_t mac, const Node * node )
 	}
 
     return false;
+}
+
+
+PushDevice * PushBridge::GetPushDevice ( uint64_t mac, bool update )
+{
+    DEBUGFTRACE ( "GetPushDevice: mac " << mac );
+
+    if ( mac == raspBee.mac ) {
+        DEBUGV2 ( "GetPushDevice: mac " << mac << " found raspBee." );
+        return &raspBee;
+    }
+    
+	PushDevice * device = 0;
+
+	if ( !pthread_mutex_lock ( &devicesLock ) )
+	{
+		map < uint64_t, PushDevice * >::iterator it = devices.find ( mac );
+		if ( it != devices.end () ) {
+			device = it->second;
+		}
+        else {
+            if ( exportedRestPlugin ) 
+            {
+                int id = -1;
+                char type = 0;
+                const char * name = "Unknown";
+
+                deCONZ::Address addr;
+                addr.setExt ( mac );
+
+                LightNode * lightNode = exportedRestPlugin->getLightNodeForAddress ( addr );
+                if ( lightNode ) {
+                    lightNode->m_pushDType = type = 'l';
+                    id = lightNode->id ().toInt ();
+                    name = qPrintable ( lightNode->name () );
+                }
+                else {
+                    Sensor * sensor = exportedRestPlugin->getSensorNodeForAddress ( addr );
+                    if ( sensor ) {
+                        sensor->m_pushDType = type = 's';
+                        id = sensor->id ().toInt ();
+                        name = qPrintable ( sensor->name () );
+                    }
+                }
+
+                if ( id > 0 && type ) {
+                    device = new PushDevice ( mac, type, id, name );
+                    if ( device ) {
+                        devices [ mac ] = device;
+                    }
+                }
+            }
+        }
+
+		if ( pthread_mutex_unlock ( &devicesLock ) ) {
+			DEBUGV ( "GetPushDevice: Failed to unlock." );
+		}
+
+		if ( device ) {
+			DEBUGV2 ( "GetPushDevice: mac " << mac << " found. type:" << device->dtype );
+
+            if ( update && fbridge_id >= 0 && device->id > 0 && ( __sync_val_compare_and_swap ( &device->available, false, true ) == false ) )
+			{
+				if ( fhem_node_update ) {
+					const Node * node = ( Node * ) device->node;
+					if ( node ) {
+						DEBUGV2 ( "GetPushDevice: Updating node. mac:" << device->mac << " device:" << device->dtype << device->id );
+
+						apsInst->updateNode ( *node );
+					}
+					else {
+						DEBUGV ( "GetPushDevice: device:" << device->dtype << device->id << " node is MISSING!" );
+					}
+				}
+
+				char cmd [ 128 ];
+
+				DEBUGV2 ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << device->dtype << device->id );
+				DEBUGV ( "GetPushDevice: setreading reachable mac:" << mac << " or name:" << device->dtype << device->id );
+                
+	            int len = snprintf ( cmd, 128, "{pushupd1('%i^%c^%i^reachable^1')}\n", fbridge_id, device->dtype, device->id );
+
+                if ( fhemActive && fbridge_id > 0 )
+				    EnqueueToFhem ( cmd );
+                
+                if ( pushActive ) {
+                    EnqueueToPush ( cmd, len );
+                }
+			}
+		}
+		else {
+			DEBUGV ( "GetPushDevice: mac " << mac << " NOT found!" );		
+		}
+	}
+    return device;
 }
 
 
@@ -1870,30 +2232,21 @@ void PushBridge::apsdeDataIndication ( const deCONZ::ApsDataIndication & ind )
     DEBUGL ( else { addrs = qPrintable ( ind.srcAddress ().toStringExt () ); } )
     // DEBUGV1 ( "apsdeDataIndication src:" << addrs ); 
     
-#ifdef ENABLE_REACHABLE_TIMER
-    DEBUGL ( int ms = -1 );
-#endif
-    const char * name = "Unknown";
+    const char * name = 0;
 
-    if ( !fhemActive )
-        return;
+    if ( !fhemActive && !pushActive ) return;
         
     PushDevice * device = GetPushDevice ( addr );
 
-    if ( device ) {
-        name    = device->name.c_str ();
-        
-#ifdef ENABLE_REACHABLE_TIMER
-        DEBUGL ( ms      = device->lastMS );
-#endif
+    if ( device && device->id > 0 ) {
         const char * data = ind.asdu ().data ();
         if ( data ) 
         {
             int size = ind.asdu ().size ();
 
-            if ( device->type == PUSH_TYPE_SWITCH ) 
+            if ( device->dtype == 's' ) 
             {
-                DEBUGV1 ( "apsdeDataIndication: isSwitch 1 size:" << size << " " );
+                DEBUGV1 ( "apsdeDataIndication: isSwitch 1 size:" << size << " [ " << device->name.c_str () << " ]" );
                 //const char * hex = ConvertToHexSpaceString ( data, (unsigned) size );                
                 //logfile1 << "\t" << hex << endl;
 
@@ -1932,23 +2285,24 @@ void PushBridge::apsdeDataIndication ( const deCONZ::ApsDataIndication & ind )
                     }
                     DEBUGV10 ( endl );
 
-                    if ( btn >= 0 ) {
+                    if ( btn >= 0 && fbridge_id >= 0 ) {
                         DEBUGV ( "apsdeDataIndication: btn:" << btn );
                         DEBUGV2 ( "apsdeDataIndication: btn:" << btn );
                         int seq = ( int ) data [ 1 ];
 
                         char cmd [ 128 ];
+	                    int len = snprintf ( cmd, 128, "{pushupd1('%i^%c^%i^button%i^%i^buttonLast^%i')}\n", fbridge_id, device->dtype, device->id, btn, seq, btn );
 
-#ifdef ENABLE_BULK_UPDATE1
-	                    snprintf ( cmd, 128, "{pushupd('%s^button%i^%i^buttonLast^%i')}\n", name, btn, seq, btn );
-#else
-                        snprintf ( cmd, 128, "setreading %s button%i %i\nsetreading %s buttonLast %i\n", name, btn, seq, name, btn );
-#endif
-                        EnqueueToFhem ( cmd );
+                        if ( fhemActive && fbridge_id > 0 )
+                            EnqueueToFhem ( cmd );
+                        
+                        if ( pushActive ) {
+                            EnqueueToPush ( cmd, len );
+                        }
                     }
 #ifdef DEBUG
                     else {
-                        DEBUGV1 ( "apsdeDataIndication: button unrecognized. size:" << size );
+                        DEBUGV1 ( "apsdeDataIndication: button unrecognized. size:" << size << " [ " << device->name.c_str () << " ]" );
 
                         const char * hex = ConvertToHexSpaceString ( data, (unsigned) size );                
                         logfile1 << "\t" << hex << endl;
@@ -1958,7 +2312,7 @@ void PushBridge::apsdeDataIndication ( const deCONZ::ApsDataIndication & ind )
             }
             else {
                 if ( size > 0 ) {
-                    if ( data [ 0 ] == 0 && device->type == PUSH_TYPE_LIGHT ) {
+                    if ( data [ 0 ] == 0 && device->dtype == 'l' ) {
                         //device->needsRestUpdate = true;
 
                         if ( fhem_node_update ) {
@@ -1980,10 +2334,13 @@ void PushBridge::apsdeDataIndication ( const deCONZ::ApsDataIndication & ind )
     }
     DEBUGL ( else { name = addr ? addrs : "0x0000"; } )
 
-#ifdef ENABLE_REACHABLE_TIMER
-    DEBUGV1 ( ms << " " << name << " Indication src " );
-#else
-    DEBUGV1 ( name << " Indication eps:" << (int) ind.srcEndpoint () << " epd:" << (int) ind.dstEndpoint ()  );
+#ifdef DEBUG
+    if ( device ) {
+        DEBUGV1 ( device->dtype << device->id << " Indication eps:" << (int) ind.srcEndpoint () << " epd:" << (int) ind.dstEndpoint () << " [ " << device->name.c_str () << " ]" );
+    }
+    else {
+        DEBUGV1 ( " Unknown Indication eps:" << (int) ind.srcEndpoint () << " epd:" << (int) ind.dstEndpoint ()  );        
+    }
 #endif
 }
 
@@ -2000,9 +2357,6 @@ void PushBridge::apsdeDataConfirm ( const deCONZ::ApsDataConfirm & conf )
 
     uint64_t addr = conf.dstAddress ().ext ();    
     
-#ifdef ENABLE_REACHABLE_TIMER
-    DEBUGL ( int ms = -1 );
-#endif
     DEBUGL ( const char * name = "Unknown" );
     DEBUGL ( PushDevice * device = 0 );
 
@@ -2016,18 +2370,11 @@ void PushBridge::apsdeDataConfirm ( const deCONZ::ApsDataConfirm & conf )
 #ifdef DEBUG
     if ( device ) {
         name    = device->name.c_str ();
-#ifdef ENABLE_REACHABLE_TIMER
-        ms      = device->lastMS;
-    #endif
     }
     DEBUGL ( else { name = addrs; } )
 #endif            
     
-#ifdef ENABLE_REACHABLE_TIMER
-    DEBUGV1 ( ms << " " << name << " Confirm dst " << " id:" << (int) conf.id () << " status:" << (int) conf.status () << " eps:" << (int) conf.srcEndpoint () << " epd:" << (int) conf.dstEndpoint () << endl );
-#else
     DEBUGV1 ( name << " Confirm dst " << " id:" << (int) conf.id () << " status:" << (int) conf.status () << " eps:" << (int) conf.srcEndpoint () << " epd:" << (int) conf.dstEndpoint () << endl );
-#endif
 }
 
 
@@ -2054,9 +2401,6 @@ void PushBridge::nodeEvent ( const deCONZ::NodeEvent & event )
 
     uint64_t addr = node->address ().ext ();
 
-#ifdef ENABLE_REACHABLE_TIMER
-    DEBUGL ( int ms = -1; )
-#endif
     DEBUGL ( const char * name = "Unknown"; )
     
     PushDevice * device = 0;
@@ -2065,6 +2409,8 @@ void PushBridge::nodeEvent ( const deCONZ::NodeEvent & event )
         raspBee.mac     = addr;
         raspBee.node    = node;
         DEBUGL ( device = &raspBee; )
+
+        SaveCache ();
     }
     else {
         device = GetPushDevice ( addr, updEvent );        
@@ -2072,10 +2418,6 @@ void PushBridge::nodeEvent ( const deCONZ::NodeEvent & event )
 
     if ( device ) {
         DEBUGL ( name    = device->name.c_str (); )
-        
-#ifdef ENABLE_REACHABLE_TIMER
-        ms      = device->lastMS;
-#endif
     }
     DEBUGL ( else { name    = ( addr ?  ( qPrintable ( node->address ().toStringExt () ) ) : "0x0000" ); } )
 
@@ -2084,11 +2426,8 @@ void PushBridge::nodeEvent ( const deCONZ::NodeEvent & event )
     DEBUGL ( const char * ename = "Invalid"; )
     DEBUGL ( if ( evi < MAX_EVENT_NAME ) ename = eventNames [ evi ]; )
 
-#ifdef ENABLE_REACHABLE_TIMER
-    DEBUGV1 ( ms << " " << name << " Event:" << ename << endl );
-#else
     DEBUGV1 ( name << " Event:" << ename << endl );
-#endif
+
     if ( updEvent ) {
         UpdatePushDevice ( addr, node );
 
@@ -2106,552 +2445,386 @@ void PushBridge::nodeEvent ( const deCONZ::NodeEvent & event )
 }
 
 
-#ifdef ENABLE_REACHABLE_TIMER
-////////////////////////////////////////////////////////////////////////////////
-// Reachable check timer
-////////////////////////////////////////////////////////////////////////////////
-
-void PushBridge::TimerAlive ()
-{
-    DEBUGFTRACE ( "TimerAlive" );
-
-    std::map < uint64_t, PushDevice * >::iterator it = devicesTimer.begin ();
-    
-	uint64_t ts = timerCurrent = time ( 0 );
-    srand ( ( unsigned int ) ts );
-
-    while ( it != devicesTimer.end () )
-    {
-        PushDevice * device = it->second;
-
-		uint64_t diff = ts - device->lastTS;
-
-        if ( device->type > PUSH_TYPE_SWITCH ) 
-        {
-            uint32_t typeDiff = 300;
-
-            if ( device->type == PUSH_TYPE_LIGHT ) {
-                typeDiff = 140;
-            }
-
-            if ( diff >= typeDiff )
-            {
-                //device->lastMS = -1;
-                if ( __sync_val_compare_and_swap ( & device->available, true, false ) == true ) 
-                {
-                    if ( device->name.length () > 0 )
-                    {                        
-                        DEBUGV2 ( "TimerAlive: Reachable 0 to mac " << device->mac );
-
-                        char cmd [ 128 ];
-                        const char * name = device->name.c_str ();
-
-                        DEBUGV ( "TimerAlive: Reachable 0 to device:" << name << " ms:" << diff );
-                        DEBUGV1 ( "TimerAlive: Reachable 0 to device:" << name << " ms:" << diff );
-
-                        snprintf ( cmd, 128, "setreading %s reachable 0\n", name );
-
-                        EnqueueToFhem ( cmd );
-
-                        if ( fhem_node_update ) {
-                            const Node * node = device->node;
-                            if ( node ) {
-                                DEBUGV2 ( "TimerAlive: Updating node. mac:" << device->mac << " name:" << name );
-
-                                apsInst->updateNode ( *device->node );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        device->lastMS = ( int ) diff;
-        ++it;
-    }
-}
-#endif
-
-
-void RestNodeBase::UpdateToFhem ( PushDevice * device )
+bool RestNodeBase::UpdateToFhem ()
 {
     DEBUGFTRACE ( "RestNodeBase::UpdateToFhem" );
 
-    if ( !device->needsRestUpdate ) {
-        return;
+    if ( !needsRestUpdate ) { return true; }
+
+    if ( !pushBridge.fhemActive && !pushBridge.pushActive ) {
+        return false;
     }
 
-    const char * name = device->name.c_str ();
+    int id = this->id ().toInt ();
+    if ( id <= 0 ) { return false; }
 
-	if ( name && strlen ( name ) > 0 ) 
-    {
-	    char cmd [ 256 ];
+    char cmd [ 256 ];
 
-#ifdef ENABLE_BULK_UPDATE
-		snprintf ( cmd, 256, "{pushupd('%s^id^%s^"
-			"uid^%s^"
-			"available^%i"
+    int len = snprintf ( cmd, 256, "{pushupd1('%i^%c^%i^id^%i^"
+        "uniqueid^%s^"
+        "available^%i"
 #ifdef DEBUG
-			"^mgmtBindSupported^%i^"
-			"read^%i^"
-			"lastAttributeReportBind^%i"
+        "^mgmtBindSupported^%i^"
+        "read^%i^"
+        "lastAttributeReportBind^%i"
 #endif
-			"')}\n"
-			,
-			name, qPrintable ( m_id ),
-			qPrintable ( m_uid ),
-			( int ) m_available
+        "')}\n"
+        ,
+        pushBridge.fbridge_id, m_pushDType, id, id,
+        qPrintable ( m_uid ),
+        ( int ) m_available
 #ifdef DEBUG
-			,
-			( int ) m_mgmtBindSupported,
-			( int ) m_read,
-			( int ) m_lastAttributeReportBind
+        ,
+        ( int ) m_mgmtBindSupported,
+        ( int ) m_read,
+        ( int ) m_lastAttributeReportBind
 #endif
-		);
-#else
-		snprintf ( cmd, 256, "setreading %s id %s\n"
-			"setreading %s uid %s\n"
-			"setreading %s available %i\n"
-#ifdef DEBUG
-			"setreading %s mgmtBindSupported %i\n"
-			"setreading %s read %i\n"
-			"setreading %s lastAttributeReportBind %i\n"
-#endif
-			,
-			name, qPrintable ( m_id ),
-			name, qPrintable ( m_uid ),
-			name, ( int ) m_available
-#ifdef DEBUG
-			,
-			name, ( int ) m_mgmtBindSupported,
-			name, ( int ) m_read,
-			name, ( int ) m_lastAttributeReportBind
-#endif
-		);
-#endif
-		pushBridge.EnqueueToFhem ( cmd );
-	}
+    );
+
+    if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+        pushBridge.EnqueueToFhem ( cmd );
+                        
+    if ( pushBridge.pushActive ) {
+        pushBridge.EnqueueToPush ( cmd, len );
+    }
+
+    return true;
 }
 
 
-void LightNode::UpdateToFhem ( PushDevice * device )
+bool LightNode::UpdateToFhem ()
 {
     DEBUGFTRACE ( "LightNode::UpdateToFhem" );
 
-    if ( !device->needsRestUpdate ) {
-        return;
-    }
+    m_pushDType = 'l';
+
+    if ( !needsRestUpdate ) { return true; }
 
     if ( m_type.contains ( "plug" ) ) {
-        device->type = m_pushType = PUSH_TYPE_PLUG;
+        m_pushType = PUSH_TYPE_PLUG;
     }
 
-    const char * name = device->name.c_str ();
+    int id = this->id ().toInt ();
+    if ( id <= 0 ) { return false; }
 
-	if ( name && strlen ( name ) > 0 ) 
-    {
-    	char cmd [ 1024 ];
+    if ( !pushBridge.fhemActive && !pushBridge.pushActive ) {
+        return false;
+    }
 
-        if ( !m_manufacturer.length () || !m_modelId.length () || !m_swBuildId.length () || !m_type.length () ) {
-            return;
-        }
+    char cmd [ 1024 ];
 
-		int pct = m_isOn ? ( ( m_level * 100 ) / 253 ) : 0;
-		
-#ifdef ENABLE_BULK_UPDATE		
-		snprintf ( cmd, 1024, "{pushupd('%s^level^%d^"
-			"bri^%d^"
-			"pct^%d"
-			"')}\n",
-			name, 
-			( int ) m_level,
-			( int ) m_level,
-			( int ) pct
-		);
-		
-		pushBridge.EnqueueToFhem ( cmd );
-		
-		snprintf ( cmd, 1024, "{pushupd('%s^manufacturer^%s^"
-			"modelId^%s^"
-			"swBuildId^%s^"
-			"type^%s^"
-			"manufacturerCode^%i^"
-			"clusterId^%i^"
-#ifdef DEBUG
-			"resetRetryCount^%i^"
-			"zdpResetSeq^%i^"
-#endif
-			"groupCapacity^%i^"
-			"on^%i^"
-			"groupCount^%i^"
-			"sceneCapacity^%i"
-			"')}\n",
-			name, qPrintable ( m_manufacturer ),
-			qPrintable ( m_modelId ),
-			qPrintable ( m_swBuildId ),
-			qPrintable ( m_type ),
-			( int ) m_manufacturerCode,
-			( int ) m_otauClusterId,
-#ifdef DEBUG
-			( int ) m_resetRetryCount,
-			( int ) m_zdpResetSeq,
-#endif
-			( int ) m_groupCapacity,
-			( int ) m_isOn,
-			( int ) m_groupCount,
-			( int ) m_sceneCapacity
-		);
+    int pct = m_isOn ? ( ( m_level * 100 ) / 253 ) : 0;
+    
+    int len = snprintf ( cmd, 1024, "{pushupd1('%i^l^%i^level^%d^"
+        "bri^%d^"
+        "pct^%d"
+        "')}\n",
+        pushBridge.fbridge_id, id, 
+        ( int ) m_level,
+        ( int ) m_level,
+        ( int ) pct
+    );
+    
+    if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+        pushBridge.EnqueueToFhem ( cmd );
+                        
+    if ( pushBridge.pushActive ) {
+        pushBridge.EnqueueToPush ( cmd, len );
+    }
 
-#else
-		snprintf ( cmd, 1024, "setreading %s manufacturer %s\n"
-			"setreading %s modelId %s\n"
-			"setreading %s swBuildId %s\n"
-			"setreading %s type %s\n"
-			"setreading %s manufacturerCode %i\n"
-			"setreading %s clusterId %i\n"
-#ifdef DEBUG
-			"setreading %s resetRetryCount %i\n"
-			"setreading %s zdpResetSeq %i\n"
-#endif
-			"setreading %s groupCapacity %i\n"
-			"setreading %s on %i\n"
-			"setreading %s level %i\n"
-			"setreading %s bri %i\n"
-			"setreading %s pct %i\n"
-			"setreading %s groupCount %i\n"
-			"setreading %s sceneCapacity %i\n",
-			name, qPrintable ( m_manufacturer ),
-			name, qPrintable ( m_modelId ),
-			name, qPrintable ( m_swBuildId ),
-			name, qPrintable ( m_type ),
-			name, ( int ) m_manufacturerCode,
-			name, ( int ) m_otauClusterId,
-#ifdef DEBUG
-			name, ( int ) m_resetRetryCount,
-			name, ( int ) m_zdpResetSeq,
-#endif
-			name, ( int ) m_groupCapacity,
-			name, ( int ) m_isOn,
-			name, ( int ) m_level,
-			name, ( int ) m_level,
-			name, ( int ) pct,
-			name, ( int ) m_groupCount,
-			name, ( int ) m_sceneCapacity
-		);
-#endif
-		pushBridge.EnqueueToFhem ( cmd );
-		
-		RestNodeBase::UpdateToFhem ( device );
-
-        if ( device->type != PUSH_TYPE_PLUG )
-        {
-#ifdef ENABLE_BULK_UPDATE
-			snprintf ( cmd, 1024, "{pushupd('%s^hasColor^%i^"
-                "hue^%i^"
-                "ehue^%i^"
-                "normHue^%f^"
-                "sat^%i^"
-                "colorX^%i^"
-                "colorY^%i^"
-                "colorTemperature^%i^"
-                "colorMode^%s^"
-                "colorLoopActive^%i^"
-				"colorLoopSpeed^%i"
-				"')}\n",
-				name, m_hasColor ? 1 : 0,
-				( int ) m_hue,
-				( int ) m_ehue,
-				m_normHue,
-				( int ) m_sat,
-				( int ) m_colorX,
-				( int ) m_colorY,
-				( int ) m_colorTemperature,
-				m_colorMode.length () ? qPrintable ( m_colorMode ) : "undef",
-				m_colorLoopActive ? 1 : 0,
-				m_colorLoopSpeed
-			);
-#else
-            snprintf ( cmd, 1024, "setreading %s hasColor %i\n"
-                "setreading %s hue %i\n"
-                "setreading %s ehue %i\n"
-                "setreading %s normHue %f\n"
-                "setreading %s sat %i\n"
-                "setreading %s colorX %i\n"
-                "setreading %s colorY %i\n"
-                "setreading %s colorTemperature %i\n"
-                "setreading %s colorMode %s\n"
-                "setreading %s colorLoopActive %i\n"
-                "setreading %s colorLoopSpeed %i\n",
-                name, m_hasColor ? 1 : 0,
-                name, ( int ) m_hue,
-                name, ( int ) m_ehue,
-                name, m_normHue,
-                name, ( int ) m_sat,
-                name, ( int ) m_colorX,
-                name, ( int ) m_colorY,
-                name, ( int ) m_colorTemperature,
-                name, m_colorMode.length () ? qPrintable ( m_colorMode ) : "undef",
-                name, m_colorLoopActive ? 1 : 0,
-                name, m_colorLoopSpeed
-            );
-#endif
-
-            pushBridge.EnqueueToFhem ( cmd );
-        }
-
-        device->needsRestUpdate = false;
+	if ( !m_manufacturer.length () || !m_modelId.length () || !m_swBuildId.length () || !m_type.length () ) {
+		return false;
 	}
+    
+    len = snprintf ( cmd, 1024, "{pushupd1('%i^l^%i^manufacturer^%s^"
+        "modelid^%s^"
+        "swversion^%s^"
+        "type^%s^"
+        "manufacturerCode^%i^"
+        "clusterId^%i^"
+#ifdef DEBUG
+        "resetRetryCount^%i^"
+        "zdpResetSeq^%i^"
+#endif
+        "groupCapacity^%i^"
+        "on^%i^"
+        "groupCount^%i^"
+        "sceneCapacity^%i"
+        "')}\n",
+        pushBridge.fbridge_id, id, qPrintable ( m_manufacturer ),
+        qPrintable ( m_modelId ),
+        qPrintable ( m_swBuildId ),
+        qPrintable ( m_type ),
+        ( int ) m_manufacturerCode,
+        ( int ) m_otauClusterId,
+#ifdef DEBUG
+        ( int ) m_resetRetryCount,
+        ( int ) m_zdpResetSeq,
+#endif
+        ( int ) m_groupCapacity,
+        ( int ) m_isOn,
+        ( int ) m_groupCount,
+        ( int ) m_sceneCapacity
+    );
+
+    if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+        pushBridge.EnqueueToFhem ( cmd );
+                        
+    if ( pushBridge.pushActive ) {
+        pushBridge.EnqueueToPush ( cmd, len );
+    }
+    
+    bool baseOK = RestNodeBase::UpdateToFhem ();
+
+    if ( m_pushType != PUSH_TYPE_PLUG )
+    {
+		/*num R, G, B;
+		num X = m_colorX, Y = m_colorY, Z = 1;
+
+		Xyz2Rgb ( &R, &G, &B, X, Y, Z );
+
+		unsigned int rgb = 0;
+		rgb |= ( unsigned int ) R; rgb <<= 8;
+		rgb |= ( unsigned int ) G; rgb <<= 8;
+		rgb |= ( unsigned int ) B;*/
+		
+        len = snprintf ( cmd, 1024, "{pushupd1('%i^l^%i^hascolor^%i^"
+            "hue^%i^"
+            "ehue^%i^"
+            "normHue^%f^"
+            "sat^%i^"
+            "colorX^%i^"
+            "colorY^%i^"
+            "colorTemperature^%i^"
+            "colormode^%s^"
+            "colorLoopActive^%i^"
+            "colorLoopSpeed^%i"
+            "')}\n",
+            pushBridge.fbridge_id, id, m_hasColor ? 1 : 0,
+            ( int ) m_hue,
+            ( int ) m_ehue,
+            m_normHue,
+            ( int ) m_sat,
+            ( int ) m_colorX,
+            ( int ) m_colorY,
+            ( int ) m_colorTemperature,
+            m_colorMode.length () ? qPrintable ( m_colorMode ) : "undef",
+            m_colorLoopActive ? 1 : 0,
+            m_colorLoopSpeed
+        );
+
+        if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+            pushBridge.EnqueueToFhem ( cmd );
+                            
+        if ( pushBridge.pushActive ) {
+            pushBridge.EnqueueToPush ( cmd, len );
+        }
+    }
+
+    if ( baseOK ) {
+        needsRestUpdate = false;
+        return true;
+    }
+    return false;
 }
 
 
-void Sensor::UpdateToFhem ( PushDevice * device )
+bool Sensor::UpdateToFhem ()
 {
     DEBUGFTRACE ( "Sensor::UpdateToFhem" );
 
-    if ( !device->needsRestUpdate ) {
-        return;
+    m_pushDType = 's';
+
+    if ( !needsRestUpdate ) { return true; }
+
+    int id = this->id ().toInt ();
+    if ( id <= 0 ) { return false; }
+
+    if ( !pushBridge.fhemActive && !pushBridge.pushActive ) {
+        return false;
     }
 
-    const char * name = device->name.c_str ();
+    char cmd [ 512 ];
 
-	if ( name && strlen ( name ) > 0 ) 
-    {
-	    char cmd [ 512 ];
+    if ( !m_name.length () || !m_type.length () || !m_modelid.length () || !m_manufacturer.length ()
+            || !m_swversion.length () ) {
+        return false;
+    }
 
-        if ( !m_name.length () || !m_type.length () || !m_modelid.length () || !m_manufacturer.length ()
-             || !m_swversion.length () ) {
-            return;
-        }
-
-#ifdef ENABLE_BULK_UPDATE
-		snprintf ( cmd, 512, "{pushupd('%s^deletedstate^%i^"
-			"name^%s^"
-			"type^%s^"
-			"modelid^%s^"
-			"manufacturer^%s^"
-			"swversion^%s^"
-			"mode^%i^"
+    int len = snprintf ( cmd, 512, "{pushupd1('%i^s^%i^deletedstate^%i^"
+        "name^%s^"
+        "type^%s^"
+        "modelid^%s^"
+        "manufacturer^%s^"
+        "swversion^%s^"
+        "mode^%i^"
 #ifdef DEBUG
-			"resetRetryCount^%i^"
-			"zdpResetSeq^%i^"
+        "resetRetryCount^%i^"
+        "zdpResetSeq^%i^"
 #endif
-			"etag^%s"
-			"')}\n",
-			name, ( int ) m_deletedstate,
-			qPrintable ( m_name ),
-			qPrintable ( m_type ),
-			qPrintable ( m_modelid ),
-			qPrintable ( m_manufacturer ),
-			qPrintable ( m_swversion ),
-			m_mode,
+        "etag^%s"
+        "')}\n",
+        pushBridge.fbridge_id, id, ( int ) m_deletedstate,
+        qPrintable ( m_name ),
+        qPrintable ( m_type ),
+        qPrintable ( m_modelid ),
+        qPrintable ( m_manufacturer ),
+        qPrintable ( m_swversion ),
+        m_mode,
 #ifdef DEBUG
-			m_resetRetryCount,
-			m_zdpResetSeq,
+        m_resetRetryCount,
+        m_zdpResetSeq,
 #endif
-			etag.length () ? qPrintable ( etag ) : "undef"
-		);
+        etag.length () ? qPrintable ( etag ) : "undef"
+    );
 
-#else
-		snprintf ( cmd, 512, "setreading %s deletedstate %i\n"
-			"setreading %s name %s\n"
-			"setreading %s type %s\n"
-			"setreading %s modelid %s\n"
-			"setreading %s manufacturer %s\n"
-			"setreading %s swversion %s\n"
-			"setreading %s mode %i\n"
-#ifdef DEBUG
-			"setreading %s resetRetryCount %i\n"
-			"setreading %s zdpResetSeq %i\n"
-#endif
-			"setreading %s etag %s\n",
-			name, ( int ) m_deletedstate,
-			name, qPrintable ( m_name ),
-			name, qPrintable ( m_type ),
-			name, qPrintable ( m_modelid ),
-			name, qPrintable ( m_manufacturer ),
-			name, qPrintable ( m_swversion ),
-			name, m_mode,
-#ifdef DEBUG
-			name, m_resetRetryCount,
-			name, m_zdpResetSeq,
-#endif
-			name, etag.length () ? qPrintable ( etag ) : "undef"
-		);
-#endif
+    if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+        pushBridge.EnqueueToFhem ( cmd );
+                        
+    if ( pushBridge.pushActive ) {
+        pushBridge.EnqueueToPush ( cmd, len );
+    }
 
-		pushBridge.EnqueueToFhem ( cmd );
+    m_state.m_pushId = id;
+    m_state.UpdateToFhem ();
 
-        m_state.m_pushDevice = device;
-        m_state.UpdateToFhem ( device );
+    m_config.m_pushId = id;
+    m_config.UpdateToFhem ();  
 
-        m_config.m_pushDevice = device;
-        m_config.UpdateToFhem ( device );  
-
-		RestNodeBase::UpdateToFhem ( device );
-
-        device->needsRestUpdate = false;
-	}
+    if ( RestNodeBase::UpdateToFhem () ) {
+        needsRestUpdate = false;
+        return true;
+    }
+    return false;
 }
 
 
-void Sensor::UpdateSensorFhem ()
+bool Sensor::UpdateSensorFhem ()
 {
+    if ( !pushBridge.enable_plugin ) { return false; }
+
     DEBUGFTRACE ( "Sensor::UpdateSensorFhem" );
     
-	if ( !m_pushDevice ) {
-    	uint64_t addr 	= address ().ext ();
-		if ( addr ) {
-			PushDevice * device = pushBridge.GetPushDevice ( addr );
-			if ( device ) {
-				device->node = node ();
-				device->type = m_pushType;    		
-				m_pushDevice = device;
-				
-				if ( device->needsRestUpdate ) {
-        			UpdateToFhem ( device );
-				}
-			}
-		}
-	}
+    if ( needsRestUpdate ) {
+        return UpdateToFhem ();
+    }
+    return true;
 }
 
 
-void SensorState::UpdateToFhem ( PushDevice * device )
+bool SensorState::UpdateToFhem ()
 {
     DEBUGFTRACE ( "SensorState::UpdateToFhem" );
 
-    const char * name = device->name.c_str ();
-    
-	if ( name && strlen ( name ) > 0 ) 
+    if ( m_pushId < 0 ) { return true; }
+
+    if ( !pushBridge.fhemActive && !pushBridge.pushActive ) {
+        return false;
+    }
+
+    char cmd [ 512 ];
+
+    int len = snprintf ( cmd, 512, "{pushupd1('%i^s^%i^lastupdated^%s^"
+        "flag^%s^"
+        "status^%s^"
+        "open^%s^"
+        "lux^%i"
+        "')}\n",
+        pushBridge.fbridge_id, m_pushId, m_lastupdated.length () ? qPrintable ( m_lastupdated ) : "undef",
+        m_flag.length () ? qPrintable ( m_flag ) : "undef",
+        m_status.length () ? qPrintable ( m_status ) : "undef",
+        m_open.length () ? qPrintable ( m_open ) : "undef",
+        m_lux
+    );
+
+    if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+        pushBridge.EnqueueToFhem ( cmd );
+                        
+    if ( pushBridge.pushActive ) {
+        pushBridge.EnqueueToPush ( cmd, len );
+    }
+
+    if ( m_presence.length () || m_temperature.length () || m_humidity.length () || m_daylight.length () )
     {
-	    char cmd [ 512 ];
+        len = snprintf ( cmd, 512, "{pushupd1('%i^s^%i^presence^%s^"
+            "temperature^%s^"
+            "humidity^%s^"
+            "daylight^%s"
+            "')}\n",
+            pushBridge.fbridge_id, m_pushId, m_presence.length () ? qPrintable ( m_presence ) : "undef",
+            m_temperature.length () ? qPrintable ( m_temperature ) : "undef",
+            m_humidity.length () ? qPrintable ( m_humidity ) : "undef",
+            m_daylight.length () ? qPrintable ( m_daylight ) : "undef"
+        );
 
-#ifdef ENABLE_BULK_UPDATE
-		snprintf ( cmd, 512, "{pushupd('%s^lastupdated^%s^"
-			"flag^%s^"
-			"status^%s^"
-			"open^%s^"
-			"lux^%i"
-			"')}\n",
-			name, m_lastupdated.length () ? qPrintable ( m_lastupdated ) : "undef",
-			m_flag.length () ? qPrintable ( m_flag ) : "undef",
-			m_status.length () ? qPrintable ( m_status ) : "undef",
-			m_open.length () ? qPrintable ( m_open ) : "undef",
-			m_lux
-		);
-#else
-		snprintf ( cmd, 512, "setreading %s lastupdated %s\n"
-			"setreading %s flag %s\n"
-			"setreading %s status %s\n"
-			"setreading %s open %s\n"
-			"setreading %s lux %i\n",
-			name, m_lastupdated.length () ? qPrintable ( m_lastupdated ) : "undef",
-			name, m_flag.length () ? qPrintable ( m_flag ) : "undef",
-			name, m_status.length () ? qPrintable ( m_status ) : "undef",
-			name, m_open.length () ? qPrintable ( m_open ) : "undef",
-			name, m_lux
-		);
-#endif
-		pushBridge.EnqueueToFhem ( cmd );
-
-        if ( m_pushDevice && m_pushDevice->type != PUSH_TYPE_SWITCH )
-        {
-#ifdef ENABLE_BULK_UPDATE
-			snprintf ( cmd, 512, "{pushupd('%s^presence^%s^"
-                "temperature^%s^"
-                "humidity^%s^"
-				"daylight^%s"
-				"')}\n",
-				name, m_presence.length () ? qPrintable ( m_presence ) : "undef",
-				m_temperature.length () ? qPrintable ( m_temperature ) : "undef",
-				m_humidity.length () ? qPrintable ( m_humidity ) : "undef",
-				m_daylight.length () ? qPrintable ( m_daylight ) : "undef"
-			);
-#else
-            snprintf ( cmd, 512, "setreading %s presence %s\n"
-                "setreading %s temperature %s\n"
-                "setreading %s humidity %s\n"
-                "setreading %s daylight %s\n",
-                name, m_presence.length () ? qPrintable ( m_presence ) : "undef",
-                name, m_temperature.length () ? qPrintable ( m_temperature ) : "undef",
-                name, m_humidity.length () ? qPrintable ( m_humidity ) : "undef",
-                name, m_daylight.length () ? qPrintable ( m_daylight ) : "undef"
-            );
-#endif
+        if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
             pushBridge.EnqueueToFhem ( cmd );
+                            
+        if ( pushBridge.pushActive ) {
+            pushBridge.EnqueueToPush ( cmd, len );
         }
-	}
+    }
+
+    return true;
 }
 
 
-void SensorConfig::UpdateToFhem ( PushDevice * device )
+bool SensorConfig::UpdateToFhem ()
 {
     DEBUGFTRACE ( "SensorConfig::UpdateToFhem" );
 
-    const char * name = device->name.c_str ();
+    if ( m_pushId < 0 ) { return true; }
 
-	if ( name && strlen ( name ) > 0 ) 
+    if ( !pushBridge.fhemActive && !pushBridge.pushActive ) {
+        return false;
+    }
+
+    char cmd [ 512 ];
+
+    DEBUGFTRACE ( "SensorConfig::UpdateToFhem 1" );
+
+    int len = snprintf ( cmd, 512, "{pushupd1('%i^s^%i^on^%i^"
+        "reachable^%i^"
+        "duration^%f^"
+        "battery^%i^"
+        "url^%s"
+        "')}\n",
+        pushBridge.fbridge_id, m_pushId, m_on ? 1 : 0,
+        m_reachable ? 1 : 0,
+        m_duration,
+        m_battery,
+        m_url.length () ? qPrintable ( m_url ) : "undef"
+    );
+
+    if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+        pushBridge.EnqueueToFhem ( cmd );
+                        
+    if ( pushBridge.pushActive ) {
+        pushBridge.EnqueueToPush ( cmd, len );
+    }
+    
+    if ( m_long.length () || m_lat.length () || m_sunriseoffset.length () || m_sunsetoffset.length () )
     {
-	    char cmd [ 512 ];
+        len = snprintf ( cmd, 512, "{pushupd1('%i^s^%i^longitude^%s^"
+            "latitude^%s^"
+            "sunriseoffset^%s^"
+            "sunsetoffset^%s"
+            "')}\n",
+            pushBridge.fbridge_id, m_pushId, m_long.length () ? qPrintable ( m_long ) : "undef",
+            m_lat.length () ? qPrintable ( m_lat ) : "undef",
+            m_sunriseoffset.length () ? qPrintable ( m_sunriseoffset ) : "undef",
+            m_sunsetoffset.length () ? qPrintable ( m_sunsetoffset ) : "undef"
+        );
 
-        DEBUGFTRACE ( "SensorConfig::UpdateToFhem 1" );
+        if ( pushBridge.fhemActive && pushBridge.fbridge_id > 0 )
+            pushBridge.EnqueueToFhem ( cmd );
+                            
+        if ( pushBridge.pushActive ) {
+            pushBridge.EnqueueToPush ( cmd, len );
+        }
+    }
 
-#ifdef ENABLE_BULK_UPDATE
-		snprintf ( cmd, 512, "{pushupd('%s^on^%i^"
-			"reachable^%i^"
-			"duration^%f^"
-			"battery^%i^"
-			"url^%s"
-			"')}\n",
-			name, m_on ? 1 : 0,
-			m_reachable ? 1 : 0,
-			m_duration,
-			m_battery,
-			m_url.length () ? qPrintable ( m_url ) : "undef"
-		);
-#else
-		snprintf ( cmd, 512, "setreading %s on %i\n"
-			"setreading %s reachable %i\n"
-			"setreading %s duration %f\n"
-			"setreading %s battery %i\n"
-			"setreading %s url %s\n",
-			name, m_on ? 1 : 0,
-			name, m_reachable ? 1 : 0,
-			name, m_duration,
-			name, m_battery,
-			name, m_url.length () ? qPrintable ( m_url ) : "undef"
-		);
-#endif
-
-		pushBridge.EnqueueToFhem ( cmd );
-		
-		if ( m_pushDevice && m_pushDevice->type != PUSH_TYPE_SWITCH )
-		{
-#ifdef ENABLE_BULK_UPDATE
-			snprintf ( cmd, 512, "{pushupd('%s^longitude^%s^"
-				"latitude^%s^"
-				"sunriseoffset^%s^"
-				"sunsetoffset^%s"
-				"')}\n",
-				name, m_long.length () ? qPrintable ( m_long ) : "undef",
-				m_lat.length () ? qPrintable ( m_lat ) : "undef",
-				m_sunriseoffset.length () ? qPrintable ( m_sunriseoffset ) : "undef",
-				m_sunsetoffset.length () ? qPrintable ( m_sunsetoffset ) : "undef"
-			);
-#else
-			snprintf ( cmd, 512, "setreading %s longitude %s\n"
-				"setreading %s latitude %s\n"
-				"setreading %s sunriseoffset %s\n"
-				"setreading %s sunsetoffset %s\n",
-				name, m_long.length () ? qPrintable ( m_long ) : "undef",
-				name, m_lat.length () ? qPrintable ( m_lat ) : "undef",
-				name, m_sunriseoffset.length () ? qPrintable ( m_sunriseoffset ) : "undef",
-				name, m_sunsetoffset.length () ? qPrintable ( m_sunsetoffset ) : "undef"
-			);
-#endif
-			pushBridge.EnqueueToFhem ( cmd );
-		}
-	}
+    return true;
 }
 
 #endif

@@ -1,11 +1,11 @@
---- ./deconz-rest-plugin/sensor.cpp	2017-02-18 00:29:09.627999722 +0100
-+++ ./sensor.cpp	2017-02-17 22:50:08.592855261 +0100
+--- ./deconz-rest-plugin/sensor.cpp	2017-03-04 23:50:14.983712234 +0100
++++ ./sensor.cpp	2017-02-27 01:18:12.372487346 +0100
 @@ -137,6 +137,8 @@
      sensorTypes.append("ZHASwitch");
      sensorTypes.append("ZHALight");
      sensorTypes.append("ZHAPresence");
 +
-+	pushCode ( m_pushType = PUSH_TYPE_SWITCH );
++	pushCode ( m_pushType = PUSH_TYPE_SWITCH; m_pushDType = 's' );
  }
  
  /*! Returns the sensor deleted state.

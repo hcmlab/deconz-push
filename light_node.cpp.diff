@@ -1,6 +1,14 @@
---- ./deconz-rest-plugin/light_node.cpp	2017-02-18 00:29:09.617999771 +0100
-+++ ./light_node.cpp	2017-02-18 00:18:54.388240886 +0100
-@@ -37,6 +37,7 @@
+--- ./deconz-rest-plugin/light_node.cpp	2017-03-04 23:50:14.983712234 +0100
++++ ./light_node.cpp	2017-02-28 20:36:29.672921727 +0100
+@@ -9,6 +9,7 @@
+  */
+ 
+ #include "de_web_plugin_private.h"
++#include "colorspace.h"
+ 
+ /*! Constructor.
+  */
+@@ -37,6 +38,7 @@
     m_sceneCapacity(16)
  
  {
@@ -8,7 +16,7 @@
  }
  
  /*! Returns the LightNode state.
-@@ -68,6 +69,8 @@
+@@ -68,6 +70,8 @@
  {
      if (m_manufacturerCode != code)
      {
@@ -17,7 +25,7 @@
          m_manufacturerCode = code;
  
          if (!m_manufacturer.isEmpty() && (m_manufacturer != QLatin1String("Unknown")))
-@@ -148,6 +151,8 @@
+@@ -148,6 +152,8 @@
   */
  void LightNode::setName(const QString &name)
  {
@@ -26,7 +34,7 @@
      m_name = name;
  }
  
-@@ -184,6 +189,8 @@
+@@ -184,6 +190,8 @@
   */
  void LightNode::setOtauClusterId(uint16_t clusterId)
  {
@@ -35,7 +43,7 @@
      m_otauClusterId = clusterId;
  }
  
-@@ -220,11 +227,17 @@
+@@ -220,11 +228,17 @@
      case DEV_ID_ZLL_ONOFF_LIGHT:
      case DEV_ID_ZLL_ONOFF_PLUGIN_UNIT:
          m_level = (m_isOn ? 255 : 0);
@@ -53,7 +61,7 @@
  }
  
  /*! Returns the light dimm level (0..255).
-@@ -258,6 +271,16 @@
+@@ -258,6 +272,16 @@
      DBG_Assert(level <= 255);
      if (level <= 255)
      {
@@ -70,7 +78,7 @@
          m_level = level;
      }
  }
-@@ -277,6 +300,8 @@
+@@ -277,6 +301,8 @@
      DBG_Assert(hue <= 254);
      if (hue <= 254)
      {
@@ -79,7 +87,7 @@
          m_hue = hue;
  
          m_normHue = ((double)hue * 360.0f / 254.0f) / 360.0f;
-@@ -324,6 +349,7 @@
+@@ -324,6 +350,7 @@
      m_hue = m_normHue * 254.0f;
      DBG_Assert(m_hue <= 254);
  
@@ -87,7 +95,7 @@
      m_ehue = ehue;
  }
  
-@@ -339,6 +365,8 @@
+@@ -339,6 +366,8 @@
   */
  void LightNode::setSaturation(uint8_t sat)
  {
@@ -96,10 +104,11 @@
      m_sat = sat;
  }
  
-@@ -361,6 +389,17 @@
+@@ -361,6 +390,33 @@
          y = 65279;
      }
  
++#ifdef ENABLE_PUSH
 +	float x_ = ( float ) x / ( float ) 65279;
 +	float y_ = ( float ) y / ( float ) 65279;
 +
@@ -110,11 +119,26 @@
 +
 +	pushSetNodeInfoCompName1 ( m_colorX, x, "colorX" );
 +	pushSetNodeInfoCompName1 ( m_colorY, y, "colorY" );
++	
++	/*num R, G, B;
++	num X = x_, Y = y_, Z = 1;
 +
++	Xyz2Rgb ( &R, &G, &B, X, Y, Z );
++
++	unsigned int rgb = 0;
++	rgb |= ( unsigned int ) R; rgb <<= 8;
++	rgb |= ( unsigned int ) G; rgb <<= 8;
++	rgb |= ( unsigned int ) B;
++
++	snprintf ( xy, 64, "%06x", rgb );
++
++	pushSetNodeInfoName ( xy, "rgb" );*/
++#endif
++	
      m_colorX = x;
      m_colorY = y;
  }
-@@ -393,6 +432,8 @@
+@@ -393,6 +449,8 @@
   */
  void LightNode::setColorTemperature(uint16_t colorTemperature)
  {
@@ -123,16 +147,16 @@
      m_colorTemperature = colorTemperature;
  }
  
-@@ -410,6 +451,8 @@
+@@ -410,6 +468,8 @@
  {
      DBG_Assert((colorMode == "hs") || (colorMode == "xy") || (colorMode == "ct"));
      m_colorMode = colorMode;
 +
-+	pushSetNodeInfo ( colorMode );
++	pushSetNodeInfoName ( colorMode, "colormode" );
  }
  
  /*! Sets the nodes color loop active state.
-@@ -417,6 +460,8 @@
+@@ -417,6 +477,8 @@
   */
  void LightNode::setColorLoopActive(bool colorLoopActive)
  {
@@ -141,7 +165,7 @@
      m_colorLoopActive = colorLoopActive;
  }
  
-@@ -431,6 +476,8 @@
+@@ -431,6 +493,8 @@
   */
  void LightNode::setColorLoopSpeed(uint8_t speed)
  {
@@ -150,7 +174,7 @@
      m_colorLoopSpeed = speed;
  }
  
-@@ -527,6 +574,8 @@
+@@ -527,6 +591,8 @@
   */
  void LightNode::setGroupCapacity(uint8_t capacity)
  {
@@ -159,7 +183,7 @@
      m_groupCapacity = capacity;
  }
  
-@@ -542,6 +591,8 @@
+@@ -542,6 +608,8 @@
   */
  void LightNode::setResetRetryCount(uint8_t resetRetryCount)
  {
@@ -168,7 +192,7 @@
      m_resetRetryCount = resetRetryCount;
  }
  
-@@ -557,6 +608,8 @@
+@@ -557,6 +625,8 @@
   */
  void LightNode::setZdpResetSeq(uint8_t zdpResetSeq)
  {
@@ -177,7 +201,7 @@
      m_zdpResetSeq = zdpResetSeq;
  }
  
-@@ -572,6 +625,8 @@
+@@ -572,6 +642,8 @@
   */
  void LightNode::setGroupCount(uint8_t groupCount)
  {
@@ -186,7 +210,7 @@
      m_groupCount = groupCount;
  }
  
-@@ -587,6 +642,8 @@
+@@ -587,6 +659,8 @@
   */
  void LightNode::setSceneCapacity(uint8_t sceneCapacity)
  {

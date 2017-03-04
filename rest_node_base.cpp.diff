@@ -1,5 +1,5 @@
---- ./deconz-rest-plugin/rest_node_base.cpp	2017-02-18 00:29:09.617999771 +0100
-+++ ./rest_node_base.cpp	2017-02-17 20:59:07.157149448 +0100
+--- ./deconz-rest-plugin/rest_node_base.cpp	2017-03-04 23:50:14.983712234 +0100
++++ ./rest_node_base.cpp	2017-02-28 20:36:29.672921727 +0100
 @@ -14,6 +14,7 @@
  /*! Constructor.
   */
@@ -8,60 +8,62 @@
      m_node(0),
      m_available(false),
      m_mgmtBindSupported(true),
-@@ -50,6 +51,12 @@
+@@ -50,6 +51,13 @@
  void RestNodeBase::setNode(deCONZ::Node *node)
  {
      m_node = node;
 +
 +#ifdef ENABLE_PUSH
-+	if ( PushBridge::enable_fhem_tunnel ) {
-+		pushBridge.SetNode ( this, node );
++	if ( pushBridge.enable_fhem_tunnel ) {
++		needsRestUpdate = true;
++		pushBridge.SetNode ( node );
 +	}
 +#endif
  }
  
  /*! Returns the modifiable address.
-@@ -79,6 +86,12 @@
+@@ -79,6 +87,13 @@
  void RestNodeBase::setIsAvailable(bool available)
  {
      m_available = available;
 +
 +#ifdef ENABLE_PUSH
 +	if ( pushBridge.enable_plugin && m_available != available ) {
-+		pushBridge.SetNodeAvailable ( this, available );
++		pushBridge.SetNodeAvailable ( m_pushDType, m_id.toInt(), available );
++		//if ( m_pushType == PUSH_TYPE_SWITCH ) m_pushDType = 's'; else m_pushDType = 'l';
 +	}
 +#endif
  }
  
  /*! Returns if the data needs to be saved to database.
-@@ -94,6 +107,12 @@
+@@ -94,6 +109,12 @@
  void RestNodeBase::setNeedSaveDatabase(bool needSave)
  {
      m_needSaveDatabase = needSave;
 +
 +#ifdef ENABLE_PUSH
-+	if ( pushBridge.enable_plugin && needSave && m_pushDevice ) {
-+		m_pushDevice->needsRestUpdate = true;
++	if ( pushBridge.enable_plugin && needSave ) {
++		needsRestUpdate = true;
 +	}
 +#endif
  }
  
  /*! Returns the unique identifier of the node.
-@@ -109,6 +128,8 @@
+@@ -108,6 +129,8 @@
+  */
  void RestNodeBase::setId(const QString &id)
  {
++	pushSetNodeId ( m_id, id );
++	
      m_id = id;
-+
-+	pushSetNodeInfo ( id );
  }
  
- /*! Returns the nodes unique Id.
-@@ -126,6 +147,8 @@
+@@ -126,6 +149,8 @@
  void RestNodeBase::setUniqueId(const QString &uid)
  {
      m_uid = uid;
 +
-+	pushSetNodeInfo ( uid );
++	pushSetNodeInfoName ( uid, "uniqueid" );
  }
  
  /*! Check if some data must be queried from the node.

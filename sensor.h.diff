@@ -1,4 +1,4 @@
---- ./deconz-rest-plugin/sensor.h	2017-02-18 00:29:09.627999722 +0100
+--- ./deconz-rest-plugin/sensor.h	2017-03-04 23:50:14.983712234 +0100
 +++ ./sensor.h	2017-02-17 20:59:07.167149398 +0100
 @@ -46,6 +46,8 @@
      void setLux(quint32 lux);
