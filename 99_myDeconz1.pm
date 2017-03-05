@@ -185,7 +185,9 @@ sub deCONZ_get_config
 
 			my $manufacturer = $bridge->{manufacturer};
 
-			if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
+			if ( ReadingsVal ( $key, 'isBeeBridge', 0 ) || ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) ) {
+				fhem ( "setreading $key isBeeBridge 1" );
+
 				my $NR = $bridge->{NR};
 				my $bMac = $bridge->{mac};
 				my $NAME = $bridge->{NAME};
@@ -519,7 +521,10 @@ sub deCONZ_build_config
 
 		my $manufacturer = $bridge->{manufacturer};
 
-		if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
+
+		if ( ReadingsVal ( $key, 'isBeeBridge', 0 ) || ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) ) {
+			fhem ( "setreading $key isBeeBridge 1" );
+
 			Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Bridge found!";
 
 			my $tempval = ReadingsVal ( $key, 'push', $enable_push );
