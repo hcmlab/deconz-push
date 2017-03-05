@@ -183,205 +183,208 @@ sub deCONZ_get_config
 				next;
 			}
 
-			my $manufacturer = $bridge->{manufacturer};
+			if ( !defined ( ReadingsVal ( $key, 'isBeeBridge', 0 ) ) ) {
+				my $manufacturer = $bridge->{manufacturer};
 
-			if ( ReadingsVal ( $key, 'isBeeBridge', 0 ) || ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) ) {
-				fhem ( "setreading $key isBeeBridge 1" );
+				if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
+					fhem ( "setreading $key isBeeBridge 1" );
+				}
+				else { next; }
+			}
 
-				my $NR = $bridge->{NR};
-				my $bMac = $bridge->{mac};
-				my $NAME = $bridge->{NAME};
+			my $NR = $bridge->{NR};
+			my $bMac = $bridge->{mac};
+			my $NAME = $bridge->{NAME};
+			
+			if ( !defined($NAME) || !defined($NR) || !defined($bMac) ) { next; }
+			$bMac = get_uid_from_string ( $bMac );
+			if ( !$bMac ) { next; }
+
+			my $ret = '';
+			
+			my $doRet = ( ( $deNumber == 1 || $req_uid == $bMac || $req_uid <= 0 ) ? 1 : 0 );
+
+			$ret .= "NR:" . $NR . ";" if ( $doRet );
+
+			Log3 $deCONZ_modName, 1, "$funn: Bridge NR " . $NR;
+			
+			my $deBridge;
+
+			if ( $deCONZ_initial_ID >= 0 ) {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Remapping Bridge NR $deCONZ_initial_ID to " . $NR;
+
+				$NR = $deCONZ_initial_ID;
+			}
+
+			if ( defined ( $deCONZ_map_bridges{$NR} ) ) {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating Bridge";
+			}
+			else {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating Bridge for NR " . $NR;
+
+				$deCONZ_map_bridges{$NR} = {};
+			}
+			$deBridge = $deCONZ_map_bridges{$NR};
+
+			$deBridge->{hash} = \$bridge;
+
+			if ( defined ( $deBridge->{l} ) ) {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating lights";
+			}
+			else {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating lights";
+				$deBridge->{l} = {};
+			}
+			my $lights = $deBridge->{l};
+
+			if ( defined ( $deBridge->{s} ) ) {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating sensors";
+			}
+			else {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating sensors";
+				$deBridge->{s} = {};
+			}
+			my $sensors = $deBridge->{s};
+
+			if ( defined ( $deBridge->{g} ) ) {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating groups";
+			}
+			else {
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating groups";
+				$deBridge->{g} = {};
+			}
+			my $groups = $deBridge->{g};
+
+			my $tempval = ReadingsVal ( $key, 'push', $enable_push );
+			if ( $tempval >= 0 ) {
+				$enable_push = ( $tempval eq '1' ) ? 1 : 0;
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_push $enable_push";
+			}
+
+			$tempval = ReadingsVal ( $key, 'fhemtunnel', $enable_fhem );
+			if ( $tempval >= 0 ) {
+				$enable_fhem = ( $tempval eq '1' ) ? 1 : 0;
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_fhem $enable_fhem";
+			}
+
+			$tempval = ReadingsVal ( $key, 'ssl', $enable_ssl );
+			if ( $tempval >= 0 ) {
+				$enable_ssl = ( $tempval eq '1' ) ? 1 : 0;
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: ssl $enable_ssl";
+			}
+
+			$tempval = ReadingsVal ( $key, 'fpass', $password );
+			if ( defined ( $tempval ) ) {
+				$password = $tempval;
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: fpass ...";
+			}
+
+			$tempval = ReadingsVal ( $key, 'pushSocketListener', $enable_push_socket );
+			if ( $tempval >= 0 ) {
+				$enable_push_socket = ( $tempval eq '1' ) ? 1 : 0;
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_push_socket $enable_push_socket";
+			}
+
+			$tempval = ReadingsVal ( $key, 'nodeUpdate', $enable_nodeupdate );
+			if ( $tempval >= 0 ) {
+				$enable_nodeupdate = ( $tempval eq '1' ) ? 1 : 0;
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_nodeupdate $enable_nodeupdate";
+			}
+
+			$tempval = ReadingsVal ( $key, 'pushPort', $pport );
+			
+			if ( $tempval > 0 && Scalar::Util::looks_like_number ( $tempval ) ) {
+				if ( $tempval > 0 && $tempval < 65000 ) {
+					$pport = $tempval;
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: pport $pport";
+				}
+			}
+
+			$tempval = ReadingsVal ( $key, 'fhemPort', $tport );
+
+			if ( $tempval > 0 && Scalar::Util::looks_like_number ( $tempval ) ) {
+				if ( $tempval > 0 && $tempval < 65000 ) {
+					$tport = $tempval;
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: tport $tport";
+				}
+			}
+
+			my $devNumber = 0;
+
+			foreach my $key ( keys %$devices ) {
+				my $device = $modules{HUEDevice}{defptr}{$key};
+
+				if ( !defined($device) ) {
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key not available!"; next;
+				}
 				
-				if ( !defined($NAME) || !defined($NR) || !defined($bMac) ) { next; }
-				$bMac = get_uid_from_string ( $bMac );
-				if ( !$bMac ) { next; }
-
-				my $ret = '';
+				my $name = $device->{NAME};
 				
-				my $doRet = ( ( $deNumber == 1 || $req_uid == $bMac || $req_uid <= 0 ) ? 1 : 0 );
-
-				$ret .= "NR:" . $NR . ";" if ( $doRet );
-
-				Log3 $deCONZ_modName, 1, "$funn: Bridge NR " . $NR;
-				
-				my $deBridge;
-
-				if ( $deCONZ_initial_ID >= 0 ) {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Remapping Bridge NR $deCONZ_initial_ID to " . $NR;
-
-					$NR = $deCONZ_initial_ID;
+				my $IODev = $device->{IODev};
+				if ( !defined ( $IODev ) ) {
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device ( $name ) $key has no IODev!"; next;
 				}
 
-				if ( defined ( $deCONZ_map_bridges{$NR} ) ) {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating Bridge";
-				}
-				else {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating Bridge for NR " . $NR;
-
-					$deCONZ_map_bridges{$NR} = {};
-				}
-				$deBridge = $deCONZ_map_bridges{$NR};
-
-				$deBridge->{hash} = \$bridge;
-
-				if ( defined ( $deBridge->{l} ) ) {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating lights";
-				}
-				else {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating lights";
-					$deBridge->{l} = {};
-				}
-				my $lights = $deBridge->{l};
-
-				if ( defined ( $deBridge->{s} ) ) {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating sensors";
-				}
-				else {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating sensors";
-					$deBridge->{s} = {};
-				}
-				my $sensors = $deBridge->{s};
-
-				if ( defined ( $deBridge->{g} ) ) {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Updating groups";
-				}
-				else {
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Creating groups";
-					$deBridge->{g} = {};
-				}
-				my $groups = $deBridge->{g};
-
-				my $tempval = ReadingsVal ( $key, 'push', $enable_push );
-				if ( $tempval >= 0 ) {
-					$enable_push = ( $tempval eq '1' ) ? 1 : 0;
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_push $enable_push";
+				if ( $IODev != $bridge ) {
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device ( $name ) $key NOT from bridge."; next;
 				}
 
-				$tempval = ReadingsVal ( $key, 'fhemtunnel', $enable_fhem );
-				if ( $tempval >= 0 ) {
-					$enable_fhem = ( $tempval eq '1' ) ? 1 : 0;
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_fhem $enable_fhem";
+				my $ID = $device->{ID};
+				if ( !defined ( $ID ) ) {
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device ( $name ) $key is missing an ID."; next;
 				}
 
-				$tempval = ReadingsVal ( $key, 'ssl', $enable_ssl );
-				if ( $tempval >= 0 ) {
-					$enable_ssl = ( $tempval eq '1' ) ? 1 : 0;
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: ssl $enable_ssl";
-				}
+				my $i = index ( $ID, 'S' );
+				if ( $i >= 0 ) {
+					my $m = substr ( $ID, $i + 1 );
+					if ( defined ( $m ) && length ( $m ) > 0 ) {
+						$sensors->{$m} = $device; $devNumber++;
 
-				$tempval = ReadingsVal ( $key, 'fpass', $password );
-				if ( defined ( $tempval ) ) {
-					$password = $tempval;
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: fpass ...";
-				}
-
-				$tempval = ReadingsVal ( $key, 'pushSocketListener', $enable_push_socket );
-				if ( $tempval >= 0 ) {
-					$enable_push_socket = ( $tempval eq '1' ) ? 1 : 0;
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_push_socket $enable_push_socket";
-				}
-
-				$tempval = ReadingsVal ( $key, 'nodeUpdate', $enable_nodeupdate );
-				if ( $tempval >= 0 ) {
-					$enable_nodeupdate = ( $tempval eq '1' ) ? 1 : 0;
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: enable_nodeupdate $enable_nodeupdate";
-				}
-
-				$tempval = ReadingsVal ( $key, 'pushPort', $pport );
-				
-				if ( $tempval > 0 && Scalar::Util::looks_like_number ( $tempval ) ) {
-					if ( $tempval > 0 && $tempval < 65000 ) {
-						$pport = $tempval;
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: pport $pport";
+						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Sensor $m -> Added.";
 					}
+					else {
+						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Sensor - NOT recognized";
+					}
+					next;
 				}
 
-				$tempval = ReadingsVal ( $key, 'fhemPort', $tport );
-
-				if ( $tempval > 0 && Scalar::Util::looks_like_number ( $tempval ) ) {
-					if ( $tempval > 0 && $tempval < 65000 ) {
-						$tport = $tempval;
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: tport $tport";
-					}
-				}
-
-				my $devNumber = 0;
-
-				foreach my $key ( keys %$devices ) {
-					my $device = $modules{HUEDevice}{defptr}{$key};
-
-					if ( !defined($device) ) {
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key not available!"; next;
-					}
-					
-					my $name = $device->{NAME};
-					
-					my $IODev = $device->{IODev};
-					if ( !defined ( $IODev ) ) {
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device ( $name ) $key has no IODev!"; next;
-					}
-
-					if ( $IODev != $bridge ) {
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device ( $name ) $key NOT from bridge."; next;
-					}
-
-					my $ID = $device->{ID};
-					if ( !defined ( $ID ) ) {
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device ( $name ) $key is missing an ID."; next;
-					}
-
-					my $i = index ( $ID, 'S' );
-					if ( $i >= 0 ) {
-						my $m = substr ( $ID, $i + 1 );
-						if ( defined ( $m ) && length ( $m ) > 0 ) {
-							$sensors->{$m} = $device; $devNumber++;
-
-							Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Sensor $m -> Added.";
-						}
-						else {
-							Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Sensor - NOT recognized";
-						}
-						next;
-					}
-
-					$i = index ( $ID, 'G' );
-					if ( $i >= 0 ) {
-						my $m = substr ( $ID, $i + 1 );
-						if ( defined ( $m ) && length ( $m ) > 0 ) {
-							$groups->{$m} = $device; $devNumber++;
-							
-							Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Group $m -> Added.";
-						}
-						else {
-							Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Group - NOT recognized";
-						}
-						next;
-					}
-
-					if ( Scalar::Util::looks_like_number ( $ID ) ) {
-						$lights->{$ID} = $device; $devNumber++;
+				$i = index ( $ID, 'G' );
+				if ( $i >= 0 ) {
+					my $m = substr ( $ID, $i + 1 );
+					if ( defined ( $m ) && length ( $m ) > 0 ) {
+						$groups->{$m} = $device; $devNumber++;
 						
-						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Device -> Added.";
-						next;
+						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Group $m -> Added.";
 					}
+					else {
+						Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Group - NOT recognized";
+					}
+					next;
+				}
+
+				if ( Scalar::Util::looks_like_number ( $ID ) ) {
+					$lights->{$ID} = $device; $devNumber++;
 					
-					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> NOT recognized.";
+					Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> Device -> Added.";
+					next;
 				}
 				
-				Log3 $deCONZ_modName, 1, "$funn: Added $devNumber devices.";
+				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Device $key ( $name ) -> $ID -> NOT recognized.";
+			}
+			
+			Log3 $deCONZ_modName, 1, "$funn: Added $devNumber devices.";
 
-				if ( $doRet ) {
-					$rets = "deCONZ_value:$ret";
-					$rets .= "disable:$enable_push;" if ( $enable_push >= 0 );
-					$rets .= "disablefhem:$enable_fhem;" if ( $enable_fhem >= 0 );
-					$rets .= "disablepush:$enable_push_socket;" if ( $enable_push_socket >= 0 );
-					$rets .= "nonodeupdate:$enable_push_socket;" if ( $enable_push_socket >= 0 );
-					$rets .= "fport:$tport;" if ( $tport > 0 );
-					$rets .= "pport:$pport;" if ( $pport > 0 );
-					$rets .= "ssl:$pport;" if ( $enable_ssl >= 0 );
-					$rets .= "fpass:$password;" if ( defined ( $password ) );
-					$rets .= "\n";
-				}
+			if ( $doRet ) {
+				$rets = "deCONZ_value:$ret";
+				$rets .= "disable:$enable_push;" if ( $enable_push >= 0 );
+				$rets .= "disablefhem:$enable_fhem;" if ( $enable_fhem >= 0 );
+				$rets .= "disablepush:$enable_push_socket;" if ( $enable_push_socket >= 0 );
+				$rets .= "nonodeupdate:$enable_push_socket;" if ( $enable_push_socket >= 0 );
+				$rets .= "fport:$tport;" if ( $tport > 0 );
+				$rets .= "pport:$pport;" if ( $pport > 0 );
+				$rets .= "ssl:$pport;" if ( $enable_ssl >= 0 );
+				$rets .= "fpass:$password;" if ( defined ( $password ) );
+				$rets .= "\n";
 			}
 		}
 	}
