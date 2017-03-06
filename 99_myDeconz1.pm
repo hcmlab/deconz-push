@@ -47,6 +47,7 @@ sub myDeconz1_Define($$)
 	%deCONZ_map_bridges 	= ();
 
 	deCONZ_get_config ( 0 );
+	return undef;
 }
 
 sub deCONZ_set_verbose {
