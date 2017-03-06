@@ -24,6 +24,8 @@ if [ -e $FHEM_HOME/FHEM ]; then
 	sudo cp -f 99_myDeconz1.pm $FHEM_HOME/FHEM/.
 	[ $? != 0 ] && echo 'Failed to update 99_myDeconz1.pm' && exit 1
 			
+	sudo chmod ogu+r $FHEM_HOME/FHEM/99_myDeconz1.pm
+
 	echo "Installed 99_myDeconz1.pm"
 else
 	echo 'Warning: $FHEM_HOME/FHEM not available!'
