@@ -408,13 +408,6 @@ void PushBridge::HandleFhemThread ()
 
     if ( enable_fhem_tunnel ) {
         fhemThreadRun = true;
-        
-        if ( fhemPassword.size () <= 0 ) {
-            fhemAuthOK = true;
-        }
-        else {
-            fhemAuthOK = false;
-        }
 
         DEBUGFTRACE ( "HandleFhemThread: Starting thread." );
 
@@ -1412,6 +1405,13 @@ Retry:
         }
         else {
             fhemSocket = sock; fhemListenerRun = true; conectTime = time ( 0 );
+        
+            if ( fhemPassword.size () <= 0 ) {
+                fhemAuthOK = true;
+            }
+            else {
+                fhemAuthOK = false;
+            }
 
             pthread_create ( &fhemListener, 0, FhemListenerStarter, this );
         }
@@ -1588,6 +1588,8 @@ void PushBridge::FhemListener ()
             if ( fhemSocket >= 0 && strstr ( buffer, "Password:" ) ) {
 			    int len = snprintf ( buffer, 1023, "%s\n", fhemPassword.c_str () );
                 
+                DEBUGV ( "SendToFhem: Sending password ..." );
+
                 int bytesSent = ( int ) ::send ( fhemSocket, buffer, len, MSG_NOSIGNAL );
                 if ( bytesSent != ( int ) len ) {
                     DEBUGV ( "SendToFhem: Failed to send password." );
