@@ -157,16 +157,28 @@ sub deCONZ_get_config
 				next;
 			}
 
-			my $manufacturer = $bridge->{manufacturer};
+			my $isBeeBrdige = 0;
 
-			if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
+			if ( !defined ( ReadingsVal ( $key, 'isBeeBridge', undef ) ) ) 
+			{
+				my $manufacturer = $bridge->{manufacturer};
+				if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
+					fhem ( "setreading $key isBeeBridge 1" );
+					$isBeeBrdige = 1;
+				}
+			}
+			else { $isBeeBrdige = 1; }
+
+
+			if ( $isBeeBrdige ) {
 				my $NR = $bridge->{NR};
-				my $bMac = $bridge->{mac};
+				#my $bMac = $bridge->{mac};
 				my $NAME = $bridge->{NAME};
 				
-				if ( !defined($NAME) || !defined($NR) || !defined($bMac) ) { next; }
-				$bMac = get_uid_from_string ( $bMac );
-				if ( !$bMac ) { next; }
+				if ( !defined($NAME) || !defined($NR) ) { next; }
+				#if ( !defined($NAME) || !defined($NR) || !defined($bMac) ) { next; }
+				#$bMac = get_uid_from_string ( $bMac );
+				#if ( !$bMac ) { next; }
 
 				Log3 $deCONZ_modName, $deCONZ_verbose, "$funn: Bridge found with NR " . $NR;
 				
@@ -184,22 +196,20 @@ sub deCONZ_get_config
 				next;
 			}
 
-			if ( !defined ( ReadingsVal ( $key, 'isBeeBridge', 0 ) ) ) {
-				my $manufacturer = $bridge->{manufacturer};
-
-				if ( defined ( $manufacturer ) && index ( $manufacturer, 'dresden' ) >= 0 ) {
-					fhem ( "setreading $key isBeeBridge 1" );
-				}
-				else { next; }
-			}
+			if ( !defined ( ReadingsVal ( $key, 'isBeeBridge', undef ) ) ) { next; }
 
 			my $NR = $bridge->{NR};
 			my $bMac = $bridge->{mac};
 			my $NAME = $bridge->{NAME};
 			
-			if ( !defined($NAME) || !defined($NR) || !defined($bMac) ) { next; }
-			$bMac = get_uid_from_string ( $bMac );
-			if ( !$bMac ) { next; }
+			if ( !defined($NAME) || !defined($NR) ) { next; }
+			#if ( !defined($NAME) || !defined($NR) || !defined($bMac) ) { next; }
+
+			if ( defined($bMac) ) {
+				$bMac = get_uid_from_string ( $bMac );
+				#if ( !$bMac ) { next; }
+			}
+			else { $bMac = 0; }
 
 			my $ret = '';
 			
